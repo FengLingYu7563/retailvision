@@ -23,3 +23,29 @@
 3. **1.6**：一致性測試需要 torch 與本機權重；缺少時以 `needs_weights` marker 自動 skip（CI 不跑），本機必須跑過並通過。
 4. **1.7**：gallery 每個細類只有 1 張棚拍去背標準圖，與店內實拍有明顯 domain gap；若未達 70%，依第 9 節規則在 README 附實驗紀錄說明，不默默降標。
 5. **1.8**：空位標註由程式產生候選框，再由使用者人工確認或修正；未完成人工標註前此項記為「待人工標註」。
+
+## Codex 審查補充的檢查項目（已實作，待使用者確認是否正式納入）
+
+| 項目 | 等級 | 驗證方式 |
+|---|---|---|
+| `vision/` 不 import torch、torchvision、ultralytics、fastapi、starlette | L1 | `tests/unit/test_repo_hygiene.py` |
+| repo 不追蹤資料集、checkpoint、權重、log、`.env` | L2 | `tests/unit/test_repo_hygiene.py` |
+| 資料集用 HTTPS 下載，解壓前驗證 SHA-256，解壓防路徑穿越 | L2 | `training/data/download_sku110k.py` |
+| 1.7 驗收值採嚴格定義（每類 1 張標準圖、1 個向量），增強結果另列 | L1 | `training/evaluate.py` |
+| 1.8 召回率用一對一配對；「10 張」只算有標註空位的圖 | L1 | `tests/unit/test_shelf.py`、`training/evaluate.py` |
+| 自寫的 ONNX YOLO 解碼與 Ultralytics 逐框一致 | L1 | `tests/unit/test_detector_parity.py` |
+| 分類器中斷後接續訓練的自動化測試 | L3 | **未實作**（訓練迴圈需先重構） |
+
+## Phase 1 狀態（2026-10-14）
+
+| # | 結果 | 狀態 |
+|---|---|---|
+| 1.1 | 兩次產出逐位元組相同 | 通過 |
+| 1.2 | 合成圖與 50 張真實圖 | 通過 |
+| 1.3 | SVM 細類 31.3%、粗類 48.0% | 通過 |
+| 1.4 | CNN 細類 85.7% / top-5 98.2% / 粗類 90.5% | 通過 |
+| 1.5 | mAP50 0.903（pt）/ 0.900（ONNX） | 通過 |
+| 1.6 | logits 誤差 < 1e-3，top-1 一致 100% | 通過 |
+| 1.7 | top-1 52.8% | **未達標**，見 `docs/experiments/retrieval_1_7.md` |
+| 1.8 | 候選圖 15 張已產生 | **待人工標註** |
+| 1.9 | 混淆矩陣與前 3 組分析 | 通過（待人工檢查） |
