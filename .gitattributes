@@ -1,0 +1,6 @@
+# 一律用 LF：切分檔要和 make_splits.py 的輸出逐位元組相同（驗收 1.1），
+# Windows 的 autocrlf 轉成 CRLF 會讓比對失敗
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.onnx binary
