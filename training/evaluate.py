@@ -177,6 +177,12 @@ def gpu_latency() -> dict[str, float] | None:
     return percentile_ms(times)
 
 
+def tile(img: np.ndarray, n: int) -> np.ndarray:
+    """把單一商品縮小後排成 n x n。"""
+    small = cv2.resize(img, (img.shape[1] // n, img.shape[0] // n), interpolation=cv2.INTER_AREA)
+    return np.vstack([np.hstack([small] * n)] * n)
+
+
 def eval_retrieval() -> None:
     meta = grocery_meta()
     clf = OnnxClassifier(MODELS / f"{CLS_VERSION}.onnx")
@@ -197,11 +203,15 @@ def eval_retrieval() -> None:
         top5 = np.mean([t in {m.item_id for m in r} for r, t in zip(res, y, strict=True)])
         return {"top1": round(float(top1), 4), "top5": round(float(top5), 4)}
 
-    # gallery A（驗收 1.7）：每類 1 張官方標準圖，加上水平翻轉當第二張參考
+    # gallery A（驗收 1.7）：每類 1 張官方標準圖 + 翻轉 + 排成 2x2 / 3x3。
+    # 排列是為了模擬賣場裡「一整堆」的外觀；這個組合是在 val 上比較 4 種做法後選的
+    # （實驗紀錄見 README），test 只跑這一次。
     iconic = EmbeddingIndex(q.shape[1])
     for fid, rel in enumerate(meta["iconic_images"]):
         img = load_image(GROCERY / rel)
-        iconic.add(fid, np.stack([clf.embed(img), clf.embed(cv2.flip(img, 1))]))
+        flipped = cv2.flip(img, 1)
+        views = [img, flipped, tile(img, 2), tile(img, 3), tile(flipped, 2)]
+        iconic.add(fid, np.stack([clf.embed(v) for v in views]))
     # gallery B（參考用）：模擬新品登錄流程，每類只拿 3 張訓練集實拍照當參考圖
     few_shot = EmbeddingIndex(q.shape[1])
     by_class: dict[int, list[Path]] = {}

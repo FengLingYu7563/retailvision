@@ -1,0 +1,123 @@
+{
+  "cnn": {
+    "acceptance_1_4": true,
+    "beats_svm": {
+      "coarse_top1": true,
+      "fine_top1": true
+    },
+    "coarse_top1": 0.9054,
+    "coarse_top1_from_fine": 0.9002,
+    "fine_top1": 0.8567,
+    "fine_top5": 0.9819,
+    "latency_ms_cpu_onnx": {
+      "p50": 7.01,
+      "p95": 7.69
+    },
+    "latency_ms_gpu_torch": {
+      "p50": 10.02,
+      "p95": 15.02
+    },
+    "model_version": "cls-mnv3-v1",
+    "n_test": 2485,
+    "top_confusions_fine": [
+      {
+        "a": "Orange",
+        "a_as_b": 4,
+        "b": "Satsumas",
+        "b_as_a": 23,
+        "count": 27
+      },
+      {
+        "a": "Golden-Delicious",
+        "a_as_b": 20,
+        "b": "Granny-Smith",
+        "b_as_a": 0,
+        "count": 20
+      },
+      {
+        "a": "Lemon",
+        "a_as_b": 14,
+        "b": "Red-Grapefruit",
+        "b_as_a": 0,
+        "count": 14
+      },
+      {
+        "a": "Orange",
+        "a_as_b": 8,
+        "b": "Red-Grapefruit",
+        "b_as_a": 6,
+        "count": 14
+      },
+      {
+        "a": "Granny-Smith",
+        "a_as_b": 1,
+        "b": "Lime",
+        "b_as_a": 12,
+        "count": 13
+      },
+      {
+        "a": "Yoggi-Strawberry-Yoghurt",
+        "a_as_b": 3,
+        "b": "Yoggi-Vanilla-Yoghurt",
+        "b_as_a": 10,
+        "count": 13
+      },
+      {
+        "a": "Floury-Potato",
+        "a_as_b": 7,
+        "b": "Solid-Potato",
+        "b_as_a": 6,
+        "count": 13
+      },
+      {
+        "a": "Pink-Lady",
+        "a_as_b": 2,
+        "b": "Royal-Gala",
+        "b_as_a": 7,
+        "count": 9
+      },
+      {
+        "a": "Red-Grapefruit",
+        "a_as_b": 3,
+        "b": "Satsumas",
+        "b_as_a": 5,
+        "count": 8
+      },
+      {
+        "a": "God-Morgon-Orange-Red-Grapefruit-Juice",
+        "a_as_b": 6,
+        "b": "God-Morgon-Red-Grapefruit-Juice",
+        "b_as_a": 2,
+        "count": 8
+      }
+    ]
+  },
+  "retrieval": {
+    "acceptance_1_7": false,
+    "gallery_iconic": {
+      "top1": 0.5449,
+      "top5": 0.8338
+    },
+    "gallery_train_3shot": {
+      "top1": 0.7972,
+      "top5": 0.9698
+    },
+    "n_queries": 2485
+  },
+  "svm": {
+    "coarse_params": {
+      "C": "3.0",
+      "gamma": "scale"
+    },
+    "coarse_top1": 0.4801,
+    "coarse_top1_from_fine": 0.4716,
+    "feature_dim": 2276,
+    "fine_params": {
+      "C": "3.0",
+      "gamma": "scale"
+    },
+    "fine_top1": 0.3127,
+    "n_test": 2485,
+    "svm_predict_ms_per_image_cpu": 8.003
+  }
+}
