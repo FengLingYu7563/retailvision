@@ -291,9 +291,12 @@ def eval_gaps() -> None:
         h, t = gap_recall(pred, gt)  # type: ignore[arg-type]
         hit, total, n_pred = hit + h, total + t, n_pred + len(pred)
         per_image.append({"image": item["image"], "hit": h, "gt": t, "pred": len(pred)})
-    n_images = len(per_image)
+    # 驗收要求「至少 10 張人工標註空位的貨架圖」：只算確實標了空位的圖，
+    # 已確認但沒有空位的圖另外列出（它們仍會貢獻誤報，但不能拿來湊張數）
+    n_images = sum(1 for p in per_image if p["gt"] > 0)
     metrics = {
         "n_images": n_images,
+        "n_reviewed_images": len(per_image),
         "gt_gaps": total,
         "predicted_gaps": n_pred,
         "recall": round(hit / total, 4) if total else None,

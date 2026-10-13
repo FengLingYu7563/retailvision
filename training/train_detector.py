@@ -64,6 +64,13 @@ def prepare_dataset() -> Path:
         img_dir, lbl_dir = YOLO_DIR / "images" / split, YOLO_DIR / "labels" / split
         img_dir.mkdir(parents=True, exist_ok=True)
         lbl_dir.mkdir(parents=True, exist_ok=True)
+        # Ultralytics 會讀資料夾裡的每一個檔案，所以要刪掉不在切分清單裡的舊檔，
+        # 否則切分清單改過之後，訓練與評估用的資料會和 commit 的清單不一致
+        keep_stems = {Path(n).stem for n in names}
+        for d in (img_dir, lbl_dir):
+            for f in d.iterdir():
+                if f.is_file() and f.stem not in keep_stems:
+                    f.unlink()
         for name in names:
             link_or_copy(SKU / "images" / name, img_dir / name)
             lines = [ln for r in ann.get(name, []) if (ln := to_yolo_line(r))]

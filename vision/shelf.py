@@ -128,6 +128,25 @@ def gap_recall(
     ground_truth: list[tuple[float, float, float, float]],
     iou_threshold: float = 0.3,
 ) -> tuple[int, int]:
-    """回傳 (命中數, 標註總數)。空位邊界本身很模糊，所以 IoU 門檻設 0.3 而不是 0.5。"""
-    hit = sum(any(box_iou(g, p) >= iou_threshold for p in predicted) for g in ground_truth)
-    return hit, len(ground_truth)
+    """回傳 (命中數, 標註總數)。空位邊界本身很模糊，所以 IoU 門檻設 0.3 而不是 0.5。
+
+    一對一配對：所有 (標註, 預測) 組合依 IoU 由高到低貪婪配對，每個預測框最多抵一個標註。
+    否則一個橫跨整層的大預測框會同時「命中」好幾個標註空位，高估召回率。
+    """
+    pairs = sorted(
+        (
+            (box_iou(g, p), gi, pi)
+            for gi, g in enumerate(ground_truth)
+            for pi, p in enumerate(predicted)
+        ),
+        reverse=True,
+    )
+    used_gt: set[int] = set()
+    used_pred: set[int] = set()
+    for iou, gi, pi in pairs:
+        if iou < iou_threshold:
+            break
+        if gi not in used_gt and pi not in used_pred:
+            used_gt.add(gi)
+            used_pred.add(pi)
+    return len(used_gt), len(ground_truth)

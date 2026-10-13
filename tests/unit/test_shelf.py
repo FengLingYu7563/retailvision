@@ -56,3 +56,13 @@ def test_iou_and_recall() -> None:
     assert box_iou((0, 0, 10, 10), (20, 20, 30, 30)) == 0
     hit, total = gap_recall([(0, 0, 10, 10)], [(1, 1, 10, 10), (50, 50, 60, 60)])
     assert (hit, total) == (1, 2)
+    assert gap_recall([], [(0, 0, 1, 1)]) == (0, 1)
+    assert gap_recall([(0, 0, 1, 1)], []) == (0, 0)
+
+
+def test_recall_is_one_to_one() -> None:
+    # 一個橫跨兩個標註空位的大預測框，只能抵其中一個
+    gt = [(0, 0, 10, 10), (10, 0, 20, 10)]
+    assert gap_recall([(0, 0, 20, 10)], gt) == (1, 2)
+    # 各自有對應的預測框時兩個都算命中
+    assert gap_recall([(0, 0, 11, 10), (9, 0, 20, 10)], gt) == (2, 2)
