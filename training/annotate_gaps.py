@@ -1,9 +1,11 @@
 """缺貨空位人工標註工具（驗收 1.8）。
 
 SKU-110K 沒有空位標註，所以分兩步：
-1. propose：用偵測模型 + shelf.py 從測試集挑出「看起來有空位」的圖，寫入候選框。
-2. review：人工逐張確認。候選框只是起點，**模型漏掉的空位一定要自己補框**，
+1. propose：用偵測模型 + shelf.py 從測試集挑出「看起來有空位」的圖，寫入候選框（見 propose 說明）。
+2. review：人工逐張確認。**刪掉不是空位的框，並補上漏掉的空位**，
    否則召回率會被高估（只標模型找得到的空位，召回率永遠是 100%）。
+   空位的定義：貨架上本來應該放商品、現在空著、看得到背板或層板的地方。
+   商品之間的正常小縫、畫面邊緣的牆或走道都不算。
 
 review 操作：
   左鍵拖曳     新增空位框
@@ -43,22 +45,32 @@ def save(data: dict[str, Any]) -> None:
     OUT.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def propose(n: int, scan: int) -> None:
+def propose(n: int, scan: int, min_density: float) -> None:
+    """挑候選圖並預填寬鬆版的空位框。
+
+    兩個刻意的設計，都是為了不讓評估被高估：
+    - 依測試清單順序挑，不依空位比例排序：依比例排序會專挑「偵測器漏掉一大片」的圖，
+      那些「空位」其實是漏偵測，無法評估空位演算法。改用陳列密度過濾掉偵測失敗的圖。
+    - 預填的是不做紋理驗證的寬鬆結果（候選比較多），由人刪掉不是空位的框；
+      而不是預填要被評估的演算法本身的輸出，避免標註者被它的答案牽著走。
+    已人工確認過的圖會保留，只重新產生未確認的候選。
+    """
     det = OnnxDetector(MODELS / "det-yolov8n-v1.onnx")
     names = (DATA / "splits" / "sku110k_test.txt").read_text().split()[:scan]
-    scored = []
-    for name in names:
-        img = load_image(SKU / "images" / name)
-        a = analyze_shelf(det.detect(img), img.shape)
-        if a.gaps:
-            scored.append((a.gap_ratio, name, [[g.x1, g.y1, g.x2, g.y2] for g in a.gaps]))
-    scored.sort(reverse=True)
     data = load()
+    data["images"] = [i for i in data["images"] if i.get("reviewed")]
     existing = {i["image"] for i in data["images"]}
-    for _, name, gaps in scored:
+    for name in names:
         if len(data["images"]) >= n:
             break
-        if name not in existing:
+        if name in existing:
+            continue
+        img = load_image(SKU / "images" / name)
+        a = analyze_shelf(det.detect(img), img.shape)  # 不傳 image：不做紋理驗證
+        if a.gaps and a.density >= min_density:
+            gaps = [
+                [round(g.x1, 1), round(g.y1, 1), round(g.x2, 1), round(g.y2, 1)] for g in a.gaps
+            ]
             data["images"].append({"image": name, "gaps": gaps, "reviewed": False})
     save(data)
     print(f"候選圖 {len(data['images'])} 張 -> {OUT}")
@@ -125,11 +137,12 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("propose")
     p.add_argument("--n", type=int, default=15)
-    p.add_argument("--scan", type=int, default=400)
+    p.add_argument("--scan", type=int, default=600)
+    p.add_argument("--min-density", type=float, default=0.5)
     sub.add_parser("review")
     args = ap.parse_args()
     if args.cmd == "propose":
-        propose(args.n, args.scan)
+        propose(args.n, args.scan, args.min_density)
     else:
         review()
 

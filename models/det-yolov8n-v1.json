@@ -1,0 +1,6 @@
+{
+  "version": "det-yolov8n-v1",
+  "task": "detection",
+  "imgsz": 640,
+  "source_checkpoint": "checkpoints/detector_v8n/weights/best.pt"
+}

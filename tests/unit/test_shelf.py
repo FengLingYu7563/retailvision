@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from vision.detector import Box
@@ -35,9 +36,39 @@ def test_detects_middle_gap() -> None:
 
 def test_detects_edge_gap() -> None:
     # 第二層右邊缺貨：貨架寬度由第一層決定
+    boxes = row_of(0, [0, 52, 104, 156, 208, 260]) + row_of(100, [0, 52, 104])
+    a = analyze_shelf(boxes, (300, 400, 3))
+    assert len(a.gaps) == 1 and a.gaps[0].x1 == pytest.approx(154)
+
+
+def test_row_with_too_few_items_is_ignored() -> None:
+    # 只有 2 個框的「層」多半是誤偵測或價格牌，不拿來判斷空位
     boxes = row_of(0, [0, 52, 104, 156, 208]) + row_of(100, [0, 52])
     a = analyze_shelf(boxes, (300, 300, 3))
-    assert len(a.gaps) == 1 and a.gaps[0].x1 == pytest.approx(102)
+    assert a.row_count == 1 and a.gaps == []
+
+
+def _textured_shelf(gap_textured: bool) -> tuple[np.ndarray, list[Box]]:
+    """六格貨架：有商品的格子畫條紋（高邊緣密度），第 3、4 格是空隙。"""
+    img = np.full((100, 312, 3), 90, np.uint8)
+    xs = [0, 52, 208, 260]
+    for x in xs:
+        img[10:90, x : x + 50 : 6] = 230
+    if gap_textured:  # 偵測漏掉的商品：空隙裡也有條紋
+        img[10:90, 104:204:6] = 230
+    return img, [Box(x, 10, x + 50, 90, 0.9) for x in xs]
+
+
+def test_texture_check_keeps_real_gap() -> None:
+    img, boxes = _textured_shelf(gap_textured=False)
+    a = analyze_shelf(boxes, img.shape, image=img)
+    assert len(a.gaps) == 1
+
+
+def test_texture_check_rejects_missed_product() -> None:
+    img, boxes = _textured_shelf(gap_textured=True)
+    assert len(analyze_shelf(boxes, img.shape).gaps) == 1  # 沒有影像時無法分辨
+    assert analyze_shelf(boxes, img.shape, image=img).gaps == []
 
 
 def test_small_spacing_is_not_gap() -> None:

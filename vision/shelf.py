@@ -5,6 +5,10 @@
 2. 每一層內把框依 x 排序、合併重疊區間，找出水平空隙。
 3. 空隙寬度超過該層商品中位寬度的一定比例，才算缺貨（商品之間本來就有小縫）。
 
+4. （有傳入影像時）紋理驗證：比較候選空位與同層商品框的邊緣密度。
+   偵測模型漏掉的商品，空隙裡仍有包裝的輪廓與文字，邊緣密度和商品差不多；
+   真正缺貨的地方通常只剩貨架背板，邊緣很少。不做這一步的話，偵測漏掉的商品全部會被當成空位。
+
 貨架的左右邊界取所有層的最左與最右商品，避免把畫面外側的牆面或走道當成空位。
 """
 
@@ -12,9 +16,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import cv2
 import numpy as np
+from numpy.typing import NDArray
 
 from vision.detector import Box
+from vision.io import Image
+
+EDGE_LONG_SIDE = 1024
 
 
 @dataclass(frozen=True)
@@ -72,19 +81,49 @@ def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, 
     return merged
 
 
+class EdgeDensity:
+    """用積分影像在 O(1) 時間算任意矩形內的邊緣像素比例。"""
+
+    def __init__(self, img: Image) -> None:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+        self.scale = min(1.0, EDGE_LONG_SIDE / max(gray.shape[:2]))
+        if self.scale < 1.0:
+            gray = cv2.resize(
+                gray, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA
+            )
+        edges = (cv2.Canny(gray, 50, 150) > 0).astype(np.float64)
+        self.integral: NDArray[np.float64] = np.asarray(cv2.integral(edges), dtype=np.float64)
+
+    def __call__(self, x1: float, y1: float, x2: float, y2: float) -> float:
+        h, w = self.integral.shape[0] - 1, self.integral.shape[1] - 1
+        a = int(np.clip(round(x1 * self.scale), 0, w))
+        b = int(np.clip(round(y1 * self.scale), 0, h))
+        c = int(np.clip(round(x2 * self.scale), 0, w))
+        d = int(np.clip(round(y2 * self.scale), 0, h))
+        area = (c - a) * (d - b)
+        if area <= 0:
+            return 0.0
+        ii = self.integral
+        return float(ii[d, c] - ii[b, c] - ii[d, a] + ii[b, a]) / area
+
+
 def analyze_shelf(
     boxes: list[Box],
     image_shape: tuple[int, ...],
+    image: Image | None = None,
     min_gap_factor: float = 0.8,
     row_tolerance: float = 0.5,
-    min_row_items: int = 2,
+    min_row_items: int = 3,
+    texture_ratio: float = 0.5,
 ) -> ShelfAnalysis:
+    """texture_ratio：候選空位的邊緣密度低於「同層商品中位密度 x texture_ratio」才算空位。"""
     if not boxes:
         return ShelfAnalysis(item_count=0, row_count=0)
     rows = [r for r in group_rows(boxes, row_tolerance) if len(r) >= min_row_items]
     if not rows:
         return ShelfAnalysis(item_count=len(boxes), row_count=0)
 
+    edge_density = EdgeDensity(image) if image is not None else None
     shelf_x1 = min(b.x1 for r in rows for b in r)
     shelf_x2 = max(b.x2 for r in rows for b in r)
     gaps: list[Gap] = []
@@ -94,10 +133,17 @@ def analyze_shelf(
         # 以中位數決定這一層的上下緣，比 min/max 更不受單一異常框影響
         y1 = float(np.median([b.y1 for b in row]))
         y2 = float(np.median([b.y2 for b in row]))
+        ref = (
+            float(np.median([edge_density(b.x1, b.y1, b.x2, b.y2) for b in row]))
+            if edge_density
+            else 0.0
+        )
         occupied = _merge_intervals([(b.x1, b.x2) for b in row])
         cursor = shelf_x1
         for a, b in [*occupied, (shelf_x2, shelf_x2)]:
-            if a - cursor >= med_w * min_gap_factor:
+            if a - cursor >= med_w * min_gap_factor and not (
+                edge_density and ref > 0 and edge_density(cursor, y1, a, y2) >= ref * texture_ratio
+            ):
                 gaps.append(Gap(cursor, y1, a, y2, idx))
                 gap_width += a - cursor
             cursor = max(cursor, b)

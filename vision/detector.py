@@ -59,7 +59,10 @@ def decode_yolo(
         return []
     cx, cy, w, h = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
     xywh = np.stack([cx - w / 2, cy - h / 2, w, h], axis=1)
-    kept = cv2.dnn.NMSBoxes(xywh.tolist(), scores.tolist(), conf, iou, top_k=max_det)
+    # 不能把 max_det 傳給 NMSBoxes 的 top_k：OpenCV 的 top_k 是在 NMS「之前」只保留前 k 個候選框，
+    # 密集貨架的候選框有好幾千個（同一商品有多個重疊框），會讓後面的商品在 NMS 前就被丟掉。
+    # 先完整做 NMS（結果已依分數排序），再截取前 max_det 個。
+    kept = cv2.dnn.NMSBoxes(xywh.tolist(), scores.tolist(), conf, iou)
     idx = np.asarray(kept, dtype=np.int64).ravel()[:max_det]
     H, W = image_shape[:2]
     boxes: list[Box] = []
@@ -85,9 +88,14 @@ class OnnxDetector:
         self.input_name = self.session.get_inputs()[0].name
 
     def detect(
-        self, img: Image, conf: float = 0.25, iou: float = 0.6, max_det: int = DEFAULT_MAX_DET
+        self,
+        img: Image,
+        conf: float = 0.25,
+        iou: float = 0.6,
+        max_det: int = DEFAULT_MAX_DET,
+        interpolation: int | None = None,
     ) -> list[Box]:
-        padded, lb = letterbox(img, self.imgsz)
+        padded, lb = letterbox(img, self.imgsz, interpolation=interpolation)
         x = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32).transpose(2, 0, 1) / 255.0
         (out,) = self.session.run(None, {self.input_name: x[None]})
         return decode_yolo(out, lb, img.shape, conf, iou, max_det)

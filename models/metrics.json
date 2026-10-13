@@ -10,12 +10,12 @@
     "fine_top1": 0.8567,
     "fine_top5": 0.9819,
     "latency_ms_cpu_onnx": {
-      "p50": 7.01,
-      "p95": 7.69
+      "p50": 6.79,
+      "p95": 7.42
     },
     "latency_ms_gpu_torch": {
-      "p50": 10.02,
-      "p95": 15.02
+      "p50": 8.63,
+      "p95": 9.79
     },
     "model_version": "cls-mnv3-v1",
     "n_test": 2485,
@@ -91,6 +91,24 @@
         "count": 8
       }
     ]
+  },
+  "detector": {
+    "acceptance_1_5": true,
+    "latency_ms_cpu_onnx_detect_and_analyze": {
+      "p50": 119.75,
+      "p95": 160.54
+    },
+    "mAP50": 0.9025,
+    "mAP50_95": 0.546,
+    "model_version": "det-yolov8n-v1",
+    "n_test": 2936,
+    "onnx_mAP50": 0.8997,
+    "onnx_mAP50_95": 0.5444,
+    "precision": 0.8983,
+    "recall": 0.8317
+  },
+  "gaps": {
+    "status": "pending_annotation"
   },
   "retrieval": {
     "acceptance_1_7": false,

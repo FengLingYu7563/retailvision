@@ -256,7 +256,24 @@ def eval_detector() -> None:
         "recall": round(float(res.box.mr), 4),
         "n_test": len((DATA / "splits" / "sku110k_test.txt").read_text().split()),
     }
-    metrics["acceptance_1_5"] = metrics["mAP50"] >= 0.75
+    # 再用匯出的 ONNX 檔（上線實際使用的模型）算一次 mAP，確認匯出沒有損失準確率。
+    # ONNX 是固定輸入大小，Ultralytics 會自動改用 batch=1、正方形 letterbox。
+    onnx_res = YOLO(str(MODELS / f"{DET_VERSION}.onnx"), task="detect").val(
+        data=str(yolo_yaml),
+        split="test",
+        imgsz=640,
+        batch=1,
+        max_det=1000,
+        workers=2,
+        plots=False,
+        verbose=False,
+        project=str(CHECKPOINTS),
+        name="detector_v8n_test_onnx",
+        exist_ok=True,
+    )
+    metrics["onnx_mAP50"] = round(float(onnx_res.box.map50), 4)
+    metrics["onnx_mAP50_95"] = round(float(onnx_res.box.map), 4)
+    metrics["acceptance_1_5"] = min(metrics["mAP50"], metrics["onnx_mAP50"]) >= 0.75
 
     det = OnnxDetector(MODELS / f"{DET_VERSION}.onnx")
     names = (DATA / "splits" / "sku110k_test.txt").read_text().split()[:20]
@@ -265,7 +282,7 @@ def eval_detector() -> None:
     times = []
     for img in imgs:
         t = time.perf_counter()
-        analyze_shelf(det.detect(img), img.shape)
+        analyze_shelf(det.detect(img), img.shape, image=img)
         times.append(time.perf_counter() - t)
     metrics["latency_ms_cpu_onnx_detect_and_analyze"] = percentile_ms(times)
     update_metrics("detector", metrics)
@@ -285,7 +302,7 @@ def eval_gaps() -> None:
         if not item.get("reviewed"):
             continue
         img = load_image(DATA / "raw" / "SKU110K_fixed" / "images" / item["image"])
-        analysis = analyze_shelf(det.detect(img), img.shape)
+        analysis = analyze_shelf(det.detect(img), img.shape, image=img)
         pred = [(g.x1, g.y1, g.x2, g.y2) for g in analysis.gaps]
         gt = [tuple(g) for g in item["gaps"]]
         h, t = gap_recall(pred, gt)  # type: ignore[arg-type]
@@ -294,6 +311,10 @@ def eval_gaps() -> None:
     # 驗收要求「至少 10 張人工標註空位的貨架圖」：只算確實標了空位的圖，
     # 已確認但沒有空位的圖另外列出（它們仍會貢獻誤報，但不能拿來湊張數）
     n_images = sum(1 for p in per_image if p["gt"] > 0)
+    if not per_image:
+        print("候選圖都還沒有人工確認，略過（驗收 1.8 記為待人工標註）")
+        update_metrics("gaps", {"status": "pending_annotation"})
+        return
     metrics = {
         "n_images": n_images,
         "n_reviewed_images": len(per_image),

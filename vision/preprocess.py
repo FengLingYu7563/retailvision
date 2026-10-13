@@ -84,15 +84,22 @@ class Letterbox:
     pad_y: int
 
 
-def letterbox(img: Image, size: int = 640, color: int = 114) -> tuple[Image, Letterbox]:
+def letterbox(
+    img: Image, size: int = 640, color: int = 114, interpolation: int | None = None
+) -> tuple[Image, Letterbox]:
     """等比例縮放後補邊成正方形（YOLO 的輸入格式）。
 
     不直接拉伸成正方形：貨架照片多半是寬長形，拉伸會讓商品變形，降低偵測準確率。
+    縮小預設用 INTER_AREA：和 Ultralytics 計算 val/test mAP 時載入圖片的方式相同，
+    上線前處理才和報告的 mAP 條件一致；也能避免 3000 像素縮到 640 時的鋸齒。
     """
     h, w = img.shape[:2]
     scale = min(size / h, size / w)
     nh, nw = round(h * scale), round(w * scale)
-    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+    if interpolation is not None:
+        interp = interpolation
+    else:
+        interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
     resized = cv2.resize(img, (nw, nh), interpolation=interp)
     pad_x, pad_y = (size - nw) // 2, (size - nh) // 2
     out = np.full((size, size, 3), color, dtype=np.uint8)
