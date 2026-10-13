@@ -59,4 +59,5 @@ addopts = "-q"
 markers = [
     "needs_weights: 需要本機訓練出的權重與 torch，CI 自動 skip",
     "needs_data: 需要本機下載的資料集，CI 自動 skip",
+    "needs_detector: 需要 ultralytics、偵測模型 ONNX 與 SKU-110K，CI 自動 skip",
 ]

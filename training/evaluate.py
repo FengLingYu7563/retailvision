@@ -203,15 +203,19 @@ def eval_retrieval() -> None:
         top5 = np.mean([t in {m.item_id for m in r} for r, t in zip(res, y, strict=True)])
         return {"top1": round(float(top1), 4), "top5": round(float(top5), 4)}
 
-    # gallery A（驗收 1.7）：每類 1 張官方標準圖 + 翻轉 + 排成 2x2 / 3x3。
-    # 排列是為了模擬賣場裡「一整堆」的外觀；這個組合是在 val 上比較 4 種做法後選的
-    # （實驗紀錄見 README），test 只跑這一次。
+    # gallery A（驗收 1.7 的正式值）：嚴格定義，每類只有 1 張官方標準圖、1 個向量
     iconic = EmbeddingIndex(q.shape[1])
+    # gallery A'（實驗，不作為驗收值）：同一張標準圖加翻轉、排成 2x2 / 3x3，
+    # 模擬賣場裡「一整堆」的外觀。這個組合是在 val 上比較 4 種做法後選的
+    # （docs/experiments/retrieval_1_7.md），test 只跑這一次。
+    iconic_aug = EmbeddingIndex(q.shape[1])
     for fid, rel in enumerate(meta["iconic_images"]):
         img = load_image(GROCERY / rel)
         flipped = cv2.flip(img, 1)
         views = [img, flipped, tile(img, 2), tile(img, 3), tile(flipped, 2)]
-        iconic.add(fid, np.stack([clf.embed(v) for v in views]))
+        embs = np.stack([clf.embed(v) for v in views])
+        iconic.add(fid, embs[:1])
+        iconic_aug.add(fid, embs)
     # gallery B（參考用）：模擬新品登錄流程，每類只拿 3 張訓練集實拍照當參考圖
     few_shot = EmbeddingIndex(q.shape[1])
     by_class: dict[int, list[Path]] = {}
@@ -222,6 +226,7 @@ def eval_retrieval() -> None:
 
     metrics = {
         "gallery_iconic": accuracy(iconic),
+        "gallery_iconic_augmented": accuracy(iconic_aug),
         "gallery_train_3shot": accuracy(few_shot),
         "n_queries": len(test),
     }

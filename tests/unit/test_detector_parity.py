@@ -14,14 +14,12 @@ from __future__ import annotations
 import cv2
 import pytest
 
-from tests.conftest import MODELS_DIR, ROOT
+from tests.conftest import MODELS_DIR, ROOT, SKU_IMAGES
 from vision.detector import OnnxDetector
 from vision.io import load_image
 from vision.shelf import box_iou
 
-pytestmark = [pytest.mark.needs_weights, pytest.mark.needs_data]
-
-SKU_IMAGES = ROOT / "training" / "data" / "raw" / "SKU110K_fixed" / "images"
+pytestmark = pytest.mark.needs_detector
 
 
 def test_onnx_detector_matches_ultralytics() -> None:

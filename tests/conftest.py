@@ -17,17 +17,25 @@ ROOT = Path(__file__).resolve().parents[1]
 GROCERY_DIR = ROOT / "training" / "data" / "raw" / "GroceryStoreDataset" / "dataset"
 MODELS_DIR = ROOT / "models"
 CHECKPOINT_DIR = ROOT / "checkpoints"
+SKU_IMAGES = ROOT / "training" / "data" / "raw" / "SKU110K_fixed" / "images"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     has_data = GROCERY_DIR.exists()
     has_torch = importlib.util.find_spec("torch") is not None
     has_weights = has_torch and any(CHECKPOINT_DIR.glob("classifier*/best.pt"))
+    has_detector = (
+        importlib.util.find_spec("ultralytics") is not None
+        and (MODELS_DIR / "det-yolov8n-v1.onnx").exists()
+        and SKU_IMAGES.exists()
+    )
     for item in items:
         if "needs_data" in item.keywords and not has_data:
             item.add_marker(pytest.mark.skip(reason="缺少本機資料集"))
         if "needs_weights" in item.keywords and not has_weights:
             item.add_marker(pytest.mark.skip(reason="缺少 torch 或本機訓練權重"))
+        if "needs_detector" in item.keywords and not has_detector:
+            item.add_marker(pytest.mark.skip(reason="缺少 ultralytics、偵測模型或 SKU-110K"))
 
 
 @pytest.fixture
