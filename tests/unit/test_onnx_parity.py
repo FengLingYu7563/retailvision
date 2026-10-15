@@ -18,19 +18,25 @@ from vision.preprocess import to_classifier_input
 
 pytestmark = [pytest.mark.needs_weights, pytest.mark.needs_data]
 
-VERSION = "cls-mnv3-v1"
+# (ONNX 版本, checkpoint 資料夾)：v1 保留做對照，v2 是正式上線的模型
+MODELS = [
+    ("cls-mnv3-v1", "classifier_mnv3"),
+    ("cls-dinov2-v2", "classifier_dino_metric"),
+]
 
 
-def test_classifier_onnx_matches_torch() -> None:
+@pytest.mark.parametrize(("version", "ckpt_dir"), MODELS)
+def test_classifier_onnx_matches_torch(version: str, ckpt_dir: str) -> None:
     import torch
 
     from training.export_onnx import load_classifier
     from vision.classifier import OnnxClassifier
 
-    onnx_path = MODELS_DIR / f"{VERSION}.onnx"
-    if not onnx_path.exists():
-        pytest.skip("尚未匯出 ONNX")
-    model = load_classifier(CHECKPOINT_DIR / "classifier_mnv3" / "best.pt")
+    onnx_path = MODELS_DIR / f"{version}.onnx"
+    ckpt = CHECKPOINT_DIR / ckpt_dir / "best.pt"
+    if not (onnx_path.exists() and ckpt.exists()):
+        pytest.skip(f"尚未訓練或匯出 {version}")
+    model = load_classifier(ckpt)
     clf = OnnxClassifier(onnx_path)
 
     with (ROOT / "training" / "data" / "splits" / "grocery_val.csv").open(encoding="utf-8") as f:

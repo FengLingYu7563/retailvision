@@ -5,90 +5,90 @@
       "coarse_top1": true,
       "fine_top1": true
     },
-    "coarse_top1": 0.9054,
-    "coarse_top1_from_fine": 0.9002,
-    "fine_top1": 0.8567,
-    "fine_top5": 0.9819,
+    "coarse_top1": 0.967,
+    "coarse_top1_from_fine": 0.9698,
+    "fine_top1": 0.9513,
+    "fine_top5": 0.9984,
     "latency_ms_cpu_onnx": {
-      "p50": 6.79,
-      "p95": 7.42
+      "p50": 53.23,
+      "p95": 55.81
     },
     "latency_ms_gpu_torch": {
-      "p50": 8.63,
-      "p95": 9.79
+      "p50": 9.15,
+      "p95": 14.63
     },
-    "model_version": "cls-mnv3-v1",
+    "model_version": "cls-dinov2-v2",
     "n_test": 2485,
     "top_confusions_fine": [
       {
         "a": "Orange",
-        "a_as_b": 4,
+        "a_as_b": 1,
         "b": "Satsumas",
-        "b_as_a": 23,
-        "count": 27
+        "b_as_a": 20,
+        "count": 21
       },
       {
         "a": "Golden-Delicious",
-        "a_as_b": 20,
+        "a_as_b": 9,
         "b": "Granny-Smith",
-        "b_as_a": 0,
-        "count": 20
-      },
-      {
-        "a": "Lemon",
-        "a_as_b": 14,
-        "b": "Red-Grapefruit",
-        "b_as_a": 0,
-        "count": 14
-      },
-      {
-        "a": "Orange",
-        "a_as_b": 8,
-        "b": "Red-Grapefruit",
-        "b_as_a": 6,
-        "count": 14
-      },
-      {
-        "a": "Granny-Smith",
-        "a_as_b": 1,
-        "b": "Lime",
-        "b_as_a": 12,
-        "count": 13
-      },
-      {
-        "a": "Yoggi-Strawberry-Yoghurt",
-        "a_as_b": 3,
-        "b": "Yoggi-Vanilla-Yoghurt",
-        "b_as_a": 10,
-        "count": 13
-      },
-      {
-        "a": "Floury-Potato",
-        "a_as_b": 7,
-        "b": "Solid-Potato",
-        "b_as_a": 6,
+        "b_as_a": 4,
         "count": 13
       },
       {
         "a": "Pink-Lady",
-        "a_as_b": 2,
+        "a_as_b": 0,
         "b": "Royal-Gala",
-        "b_as_a": 7,
+        "b_as_a": 10,
+        "count": 10
+      },
+      {
+        "a": "Lemon",
+        "a_as_b": 9,
+        "b": "Satsumas",
+        "b_as_a": 0,
         "count": 9
       },
       {
         "a": "Red-Grapefruit",
-        "a_as_b": 3,
+        "a_as_b": 5,
         "b": "Satsumas",
-        "b_as_a": 5,
+        "b_as_a": 3,
         "count": 8
       },
       {
-        "a": "God-Morgon-Orange-Red-Grapefruit-Juice",
-        "a_as_b": 6,
-        "b": "God-Morgon-Red-Grapefruit-Juice",
+        "a": "Cantaloupe",
+        "a_as_b": 7,
+        "b": "Galia-Melon",
+        "b_as_a": 0,
+        "count": 7
+      },
+      {
+        "a": "Lemon",
+        "a_as_b": 5,
+        "b": "Orange",
+        "b_as_a": 0,
+        "count": 5
+      },
+      {
+        "a": "Royal-Gala",
+        "a_as_b": 0,
+        "b": "Nectarine",
+        "b_as_a": 4,
+        "count": 4
+      },
+      {
+        "a": "Orange",
+        "a_as_b": 2,
+        "b": "Red-Grapefruit",
         "b_as_a": 2,
-        "count": 8
+        "count": 4
+      },
+      {
+        "a": "Floury-Potato",
+        "a_as_b": 3,
+        "b": "Solid-Potato",
+        "b_as_a": 1,
+        "count": 4
       }
     ]
   },
@@ -209,20 +209,55 @@
     "recall": 0.2553
   },
   "retrieval": {
-    "acceptance_1_7": false,
+    "acceptance_1_7": true,
     "gallery_iconic": {
-      "top1": 0.528,
-      "top5": 0.8322
+      "top1": 0.9533,
+      "top5": 0.9992
     },
     "gallery_iconic_augmented": {
-      "top1": 0.5449,
-      "top5": 0.8338
+      "top1": 0.9549,
+      "top5": 0.9992
     },
     "gallery_train_3shot": {
-      "top1": 0.7972,
-      "top5": 0.9698
+      "top1": 0.9521,
+      "top5": 0.9988
     },
     "n_queries": 2485
+  },
+  "retrieval_holdout": {
+    "holdout_classes": [
+      "Golden-Delicious",
+      "Pink-Lady",
+      "Red-Delicious",
+      "Royal-Gala",
+      "Mango",
+      "Cantaloupe",
+      "Galia-Melon",
+      "Watermelon",
+      "Peach",
+      "God-Morgon-Apple-Juice",
+      "Oatly-Natural-Oatghurt",
+      "Oatly-Oat-Milk",
+      "Valio-Vanilla-Yoghurt",
+      "Asparagus",
+      "Cabbage",
+      "Cucumber",
+      "Orange-Bell-Pepper",
+      "Yellow-Bell-Pepper",
+      "Solid-Potato",
+      "Beef-Tomato"
+    ],
+    "note": "實驗模型（20 類完全不參與訓練），gallery 為 81 類各 1 張標準圖",
+    "seen_classes": {
+      "n": 1823,
+      "top1": 0.9528,
+      "top5": 0.9978
+    },
+    "unseen_classes": {
+      "n": 662,
+      "top1": 0.4849,
+      "top5": 0.929
+    }
   },
   "svm": {
     "coarse_params": {

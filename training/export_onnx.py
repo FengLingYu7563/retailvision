@@ -15,16 +15,19 @@ from pathlib import Path
 import torch
 
 from training.common import CHECKPOINTS, MODELS, grocery_meta
-from training.models import HierarchicalClassifier
+from training.models import build_model
 
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
 OPSET = 17
 
 
-def load_classifier(ckpt: Path) -> HierarchicalClassifier:
+def load_classifier(ckpt: Path) -> torch.nn.Module:
     state = torch.load(ckpt, map_location="cpu", weights_only=False)
-    model = HierarchicalClassifier(state["n_fine"], state["n_coarse"], pretrained=False)
+    # v1 的 checkpoint 沒有記錄 arch，預設是 MobileNetV3
+    model = build_model(
+        state.get("arch", "mnv3"), state["n_fine"], state["n_coarse"], pretrained=False
+    )
     model.load_state_dict(state["model"])
     return model.eval()
 
@@ -60,7 +63,7 @@ def export_classifier(ckpt: Path, version: str) -> Path:
                 "fine_names": meta["fine_names"],
                 "coarse_names": meta["coarse_names"],
                 "fine_to_coarse": meta["fine_to_coarse"],
-                "source_checkpoint": str(ckpt.relative_to(CHECKPOINTS.parent).as_posix()),
+                "source_checkpoint": ckpt.resolve().relative_to(CHECKPOINTS.parent).as_posix(),
             },
             ensure_ascii=False,
             indent=2,
@@ -87,7 +90,7 @@ def export_detector(weights: Path, version: str, imgsz: int) -> Path:
                 "version": version,
                 "task": "detection",
                 "imgsz": imgsz,
-                "source_checkpoint": str(weights.relative_to(CHECKPOINTS.parent).as_posix()),
+                "source_checkpoint": weights.resolve().relative_to(CHECKPOINTS.parent).as_posix(),
             },
             indent=2,
         ),

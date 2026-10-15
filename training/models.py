@@ -47,3 +47,50 @@ class HierarchicalClassifier(nn.Module):
             *self.fine_head.parameters(),
             *self.coarse_head.parameters(),
         ]
+
+
+class DinoClassifier(nn.Module):
+    """DINOv2-small（ViT-S/14）backbone + 同樣的 neck 與雙頭，介面和 HierarchicalClassifier 相同。
+
+    為什麼試 DINOv2：它是自監督預訓練，學到的是通用的物體外觀，不依賴 ImageNet 的類別標籤，
+    文獻上對棚拍與實拍這類 domain gap 比較穩健（驗收 1.7 的 B 方案）。
+    代價是 CPU 推論比 MobileNetV3 慢數倍。
+    """
+
+    def __init__(self, n_fine: int, n_coarse: int, pretrained: bool = True, dropout: float = 0.2):
+        super().__init__()
+        import timm
+
+        self.encoder = timm.create_model(
+            "vit_small_patch14_dinov2.lvd142m", pretrained=pretrained, img_size=224, num_classes=0
+        )
+        dim = self.encoder.num_features
+        self.neck = nn.Sequential(nn.Linear(dim, 1280), nn.Hardswish())
+        self.dropout = nn.Dropout(dropout)
+        self.fine_head = nn.Linear(1280, n_fine)
+        self.coarse_head = nn.Linear(1280, n_coarse)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        h = self.neck(self.encoder(x))  # num_classes=0 時回傳 CLS token 特徵
+        d = self.dropout(h)
+        return self.fine_head(d), self.coarse_head(d), F.normalize(h, dim=1)
+
+    def backbone_parameters(self) -> list[nn.Parameter]:
+        return list(self.encoder.parameters())
+
+    def head_parameters(self) -> list[nn.Parameter]:
+        return [
+            *self.neck.parameters(),
+            *self.fine_head.parameters(),
+            *self.coarse_head.parameters(),
+        ]
+
+
+ARCHS: dict[str, type[nn.Module]] = {
+    "mnv3": HierarchicalClassifier,
+    "dinov2s": DinoClassifier,
+}
+
+
+def build_model(arch: str, n_fine: int, n_coarse: int, pretrained: bool = True) -> nn.Module:
+    return ARCHS[arch](n_fine, n_coarse, pretrained=pretrained)

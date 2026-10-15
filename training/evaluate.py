@@ -37,7 +37,10 @@ from vision.shelf import analyze_shelf, gap_recall
 
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
-CLS_VERSION = "cls-mnv3-v1"
+# v2：DINOv2-small + SupCon（驗收 1.7 重做後選定，比較紀錄見 docs/experiments/retrieval_1_7.md）
+CLS_VERSION = "cls-dinov2-v2"
+CLS_CKPT = CHECKPOINTS / "classifier_dino_metric" / "best.pt"
+HOLDOUT_CKPT = CHECKPOINTS / "metric_dino_holdout20" / "best.pt"
 DET_VERSION = "det-yolov8n-v1"
 GAP_ANNOTATIONS = DATA / "gap_annotations.json"
 
@@ -163,7 +166,7 @@ def gpu_latency() -> dict[str, float] | None:
         return None
     if not torch.cuda.is_available():
         return None
-    model = load_classifier(CHECKPOINTS / "classifier_mnv3" / "best.pt").cuda()
+    model = load_classifier(CLS_CKPT).cuda()
     x = torch.randn(1, 3, 224, 224, device="cuda")
     times = []
     with torch.no_grad():
@@ -233,6 +236,55 @@ def eval_retrieval() -> None:
     metrics["acceptance_1_7"] = metrics["gallery_iconic"]["top1"] >= 0.70
     update_metrics("retrieval", metrics)
     print(json.dumps(metrics, indent=2))
+
+
+def eval_holdout() -> None:
+    """新商品泛化：用「訓練時完全沒看過 20 個類別」的模型，在 test 上量這 20 類的檢索 top-1。
+
+    gallery 是全部 81 類各 1 張標準圖（嚴格定義），所以沒看過的類別還要和看過的類別競爭，
+    比只在 20 類之間搜尋更接近實際的新品登錄情境。這是實驗模型，不是上線模型。
+    """
+    import torch
+
+    from training.export_onnx import load_classifier
+
+    state = torch.load(HOLDOUT_CKPT, map_location="cpu", weights_only=False)
+    holdout = state["holdout"]
+    model = load_classifier(HOLDOUT_CKPT)
+    meta = grocery_meta()
+    test = grocery_split("test")
+
+    @torch.no_grad()
+    def embed(imgs: list[np.ndarray]) -> np.ndarray:
+        out = []
+        for i in range(0, len(imgs), 64):
+            x = np.concatenate([to_classifier_input(im) for im in imgs[i : i + 64]])
+            out.append(model(torch.from_numpy(x))[2].numpy())
+        return np.concatenate(out)
+
+    q = embed([load_image(s.path) for s in test])
+    g = embed([load_image(GROCERY / rel) for rel in meta["iconic_images"]])
+    y = np.array([s.fine_id for s in test])
+    sims = q @ g.T
+    top1 = sims.argmax(1)
+    top5 = np.argsort(-sims, axis=1)[:, :5]
+    ho = np.isin(y, holdout)
+
+    def acc(mask: np.ndarray) -> dict[str, float]:
+        return {
+            "top1": round(float((top1[mask] == y[mask]).mean()), 4),
+            "top5": round(float((top5[mask] == y[mask, None]).any(1).mean()), 4),
+            "n": int(mask.sum()),
+        }
+
+    metrics = {
+        "holdout_classes": [meta["fine_names"][i] for i in holdout],
+        "unseen_classes": acc(ho),
+        "seen_classes": acc(~ho),
+        "note": "實驗模型（20 類完全不參與訓練），gallery 為 81 類各 1 張標準圖",
+    }
+    update_metrics("retrieval_holdout", metrics)
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
 
 
 def eval_detector() -> None:
@@ -336,11 +388,12 @@ def eval_gaps() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", default="cnn,retrieval,detector,gaps")
+    ap.add_argument("--only", default="cnn,retrieval,holdout,detector,gaps")
     args = ap.parse_args()
     steps = {
         "cnn": eval_cnn,
         "retrieval": eval_retrieval,
+        "holdout": eval_holdout,
         "detector": eval_detector,
         "gaps": eval_gaps,
     }

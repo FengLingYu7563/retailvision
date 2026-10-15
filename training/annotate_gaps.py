@@ -33,7 +33,13 @@ from vision.detector import OnnxDetector
 from vision.io import load_image
 from vision.shelf import analyze_shelf
 
-OUT = DATA / "gap_annotations.json"
+SETS = {
+    # eval：報告成績用，來自 SKU-110K test；tune：只用來改演算法與選參數，來自 val。
+    # 兩組圖分開，參數才不會是對著評估圖調出來的。
+    "eval": (DATA / "gap_annotations.json", "sku110k_test.txt"),
+    "tune": (DATA / "gap_annotations_tune.json", "sku110k_val.txt"),
+}
+OUT, SPLIT_FILE = SETS["eval"]
 WINDOW = "gap review"
 MAX_VIEW = (1500, 900)
 
@@ -59,7 +65,7 @@ def propose(n: int, scan: int, min_density: float) -> None:
     已人工確認過的圖會保留，只重新產生未確認的候選。
     """
     det = OnnxDetector(MODELS / "det-yolov8n-v1.onnx")
-    names = (DATA / "splits" / "sku110k_test.txt").read_text().split()[:scan]
+    names = (DATA / "splits" / SPLIT_FILE).read_text().split()[:scan]
     data = load()
     data["images"] = [i for i in data["images"] if i.get("reviewed")]
     existing = {i["image"] for i in data["images"]}
@@ -143,7 +149,10 @@ def main() -> None:
     p.add_argument("--scan", type=int, default=600)
     p.add_argument("--min-density", type=float, default=0.5)
     sub.add_parser("review")
+    ap.add_argument("--set", choices=sorted(SETS), default="eval")
     args = ap.parse_args()
+    global OUT, SPLIT_FILE
+    OUT, SPLIT_FILE = SETS[args.set]
     if args.cmd == "propose":
         propose(args.n, args.scan, args.min_density)
     else:
