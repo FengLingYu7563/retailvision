@@ -2,19 +2,26 @@
 
 偵測模型只會框出「有商品的地方」，缺貨空位要從框之間的空隙推算：
 1. 依照框的垂直中心把商品分成一層一層（貨架層）。
-2. 每一層內把框依 x 排序、合併重疊區間，找出水平空隙。
-3. 空隙寬度超過該層商品中位寬度的一定比例，才算缺貨（商品之間本來就有小縫）。
+2. 每一層內把框依 x 排序、合併重疊區間，找出水平空隙，當成空位候選。
+3. 判斷候選是不是真的空位，有兩種模式：
+   - 規則（v1，沒有傳入分類器時）：空隙寬度 >= 中位商品寬 x min_gap_factor，
+     而且邊緣密度低於同層商品的 texture_ratio 倍。
+   - 分類器（v2，傳入 GapClassifier 時）：候選放寬到 0.4 個商品寬，並把**偵測框本身**也當候選
+     （偵測器會把空格裡的暗色背板誤框成商品）。對每個候選算出「和同層商品比較」的外觀特徵
+     （亮度、飽和度、邊緣密度、寬度），用 logistic regression 判斷。
+     分類器只用調參集訓練，見 training/fit_gap_classifier.py。
 
-4. （有傳入影像時）紋理驗證：比較候選空位與同層商品框的邊緣密度。
-   偵測模型漏掉的商品，空隙裡仍有包裝的輪廓與文字，邊緣密度和商品差不多；
-   真正缺貨的地方通常只剩貨架背板，邊緣很少。不做這一步的話，偵測漏掉的商品全部會被當成空位。
+為什麼特徵都用「和同層商品的比值」：不同照片的曝光、白平衡差很多，
+絕對亮度沒有意義；同一層的商品就是最好的參考值。
 
 貨架的左右邊界取所有層的最左與最右商品，避免把畫面外側的牆面或走道當成空位。
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -23,7 +30,24 @@ from numpy.typing import NDArray
 from vision.detector import Box
 from vision.io import Image
 
-EDGE_LONG_SIDE = 1024
+STATS_LONG_SIDE = 1024
+FEATURE_NAMES = [
+    "brightness_ratio",
+    "saturation_ratio",
+    "edge_ratio",
+    "brightness_abs",
+    "width_ratio",
+    "from_detection",
+    # 亮度標準差：空位多半是一片均勻的背板，深色商品上有印刷與反光，標準差較大
+    "brightness_std_ratio",
+    "edge_abs",
+    "aspect_ratio",
+    # 偵測器的信心分數（空隙候選為 0，由 from_detection 區分）：空格被誤框時信心通常較低
+    "det_confidence",
+    # 碰到貨架左右邊界：邊界外常是側板、走道，不是貨架空位
+    "at_shelf_edge",
+    "log_width_ratio",
+]
 
 
 @dataclass(frozen=True)
@@ -51,6 +75,18 @@ class ShelfAnalysis:
     gaps: list[Gap] = field(default_factory=list)
     gap_ratio: float = 0.0
     density: float = 0.0
+
+
+@dataclass(frozen=True)
+class GapCandidate:
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    row: int
+    box_index: int | None  # 來自偵測框時是該框在 boxes 中的索引；來自空隙時是 None
+    confidence: float = 0.0
+    at_edge: bool = False
 
 
 def group_rows(boxes: list[Box], row_tolerance: float = 0.5) -> list[list[Box]]:
@@ -81,30 +117,162 @@ def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, 
     return merged
 
 
-class EdgeDensity:
-    """用積分影像在 O(1) 時間算任意矩形內的邊緣像素比例。"""
+class RegionStats:
+    """用積分影像在 O(1) 時間算任意矩形內的平均亮度、飽和度、邊緣像素比例。"""
 
     def __init__(self, img: Image) -> None:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-        self.scale = min(1.0, EDGE_LONG_SIDE / max(gray.shape[:2]))
+        self.scale = min(1.0, STATS_LONG_SIDE / max(img.shape[:2]))
         if self.scale < 1.0:
-            gray = cv2.resize(
-                gray, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA
-            )
+            img = cv2.resize(img, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         edges = (cv2.Canny(gray, 50, 150) > 0).astype(np.float64)
-        self.integral: NDArray[np.float64] = np.asarray(cv2.integral(edges), dtype=np.float64)
+        v = hsv[:, :, 2] / 255.0
+        self._ii: list[NDArray[np.float64]] = [
+            np.asarray(cv2.integral(ch.astype(np.float64)), dtype=np.float64)
+            for ch in (v, hsv[:, :, 1] / 255.0, edges, v * v)
+        ]
 
-    def __call__(self, x1: float, y1: float, x2: float, y2: float) -> float:
-        h, w = self.integral.shape[0] - 1, self.integral.shape[1] - 1
+    def mean(self, x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
+        """回傳 (亮度, 飽和度, 邊緣比例, 亮度標準差)，都在 0 到 1。"""
+        ii = self._ii[0]
+        h, w = ii.shape[0] - 1, ii.shape[1] - 1
         a = int(np.clip(round(x1 * self.scale), 0, w))
         b = int(np.clip(round(y1 * self.scale), 0, h))
         c = int(np.clip(round(x2 * self.scale), 0, w))
         d = int(np.clip(round(y2 * self.scale), 0, h))
         area = (c - a) * (d - b)
         if area <= 0:
-            return 0.0
-        ii = self.integral
-        return float(ii[d, c] - ii[b, c] - ii[d, a] + ii[b, a]) / area
+            return 0.0, 0.0, 0.0, 0.0
+        v, s, e, v2 = (float(m[d, c] - m[b, c] - m[d, a] + m[b, a]) / area for m in self._ii)
+        return v, s, e, float(np.sqrt(max(v2 - v * v, 0.0)))
+
+    def edge(self, x1: float, y1: float, x2: float, y2: float) -> float:
+        return self.mean(x1, y1, x2, y2)[2]
+
+
+@dataclass(frozen=True)
+class GapClassifier:
+    """標準化 + logistic regression，參數存成 JSON（由 training/fit_gap_classifier.py 產生）。"""
+
+    mean: list[float]
+    scale: list[float]
+    coef: list[float]
+    intercept: float
+    threshold: float
+    min_gap_factor: float = 0.4
+
+    def proba(self, features: NDArray[np.float64]) -> NDArray[np.float64]:
+        z = (features - np.array(self.mean)) / np.array(self.scale)
+        logit = z @ np.array(self.coef) + self.intercept
+        return np.asarray(1.0 / (1.0 + np.exp(-logit)), dtype=np.float64)
+
+    def save(self, path: str | Path) -> None:
+        d = {**self.__dict__, "feature_names": FEATURE_NAMES}
+        Path(path).write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> GapClassifier:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        if d.pop("feature_names", FEATURE_NAMES) != FEATURE_NAMES:
+            raise ValueError("分類器的特徵定義和程式不一致，需要重新訓練")
+        return cls(**d)
+
+
+def shelf_rows(
+    boxes: list[Box], row_tolerance: float = 0.5, min_row_items: int = 3
+) -> list[list[Box]]:
+    return [r for r in group_rows(boxes, row_tolerance) if len(r) >= min_row_items]
+
+
+def gap_candidates(
+    boxes: list[Box], rows: list[list[Box]], min_gap_factor: float, include_detections: bool
+) -> list[GapCandidate]:
+    """每一層內框與框之間（以及到貨架左右邊界）的空隙；可選擇把偵測框本身也列為候選。"""
+    if not rows:
+        return []
+    index = {id(b): i for i, b in enumerate(boxes)}
+    shelf_x1 = min(b.x1 for r in rows for b in r)
+    shelf_x2 = max(b.x2 for r in rows for b in r)
+    out: list[GapCandidate] = []
+    for idx, row in enumerate(rows):
+        med_w = float(np.median([b.width for b in row]))
+        # 以中位數決定這一層的上下緣，比 min/max 更不受單一異常框影響
+        y1 = float(np.median([b.y1 for b in row]))
+        y2 = float(np.median([b.y2 for b in row]))
+        cursor = shelf_x1
+        for a, b in [*_merge_intervals([(b.x1, b.x2) for b in row]), (shelf_x2, shelf_x2)]:
+            if a - cursor >= med_w * min_gap_factor:
+                edge = cursor <= shelf_x1 + 1 or a >= shelf_x2 - 1
+                out.append(GapCandidate(cursor, y1, a, y2, idx, None, at_edge=edge))
+            cursor = max(cursor, b)
+        if include_detections:
+            out += [
+                GapCandidate(
+                    b.x1,
+                    b.y1,
+                    b.x2,
+                    b.y2,
+                    idx,
+                    index[id(b)],
+                    b.confidence,
+                    at_edge=b.x1 <= shelf_x1 + 1 or b.x2 >= shelf_x2 - 1,
+                )
+                for b in row
+            ]
+    return out
+
+
+def candidate_features(
+    cands: list[GapCandidate], rows: list[list[Box]], stats: RegionStats
+) -> NDArray[np.float64]:
+    """每個候選和「同層商品中位數」比較的特徵，欄位順序見 FEATURE_NAMES。"""
+    refs = []
+    for row in rows:
+        vals = np.array([stats.mean(b.x1, b.y1, b.x2, b.y2) for b in row])
+        aspect = float(np.median([b.height / max(b.width, 1e-3) for b in row]))
+        refs.append((np.median(vals, axis=0), float(np.median([b.width for b in row])), aspect))
+    eps = 1e-3
+    feats = []
+    for c in cands:
+        (rv, rs, re, rsd), med_w, med_aspect = refs[c.row]
+        v, s, e, sd = stats.mean(c.x1, c.y1, c.x2, c.y2)
+        feats.append(
+            [
+                v / (rv + eps),
+                s / (rs + eps),
+                e / (re + eps),
+                v,
+                (c.x2 - c.x1) / max(med_w, eps),
+                float(c.box_index is not None),
+                sd / (rsd + eps),
+                e,
+                ((c.y2 - c.y1) / max(c.x2 - c.x1, eps)) / max(med_aspect, eps),
+                c.confidence,
+                float(c.at_edge),
+                float(np.log(max((c.x2 - c.x1) / max(med_w, eps), eps))),
+            ]
+        )
+    return np.array(feats, dtype=np.float64).reshape(-1, len(FEATURE_NAMES))
+
+
+def select_gaps(
+    cands: list[GapCandidate], probs: NDArray[np.float64], threshold: float, nms_iou: float = 0.3
+) -> list[GapCandidate]:
+    """機率 >= 門檻的候選，再依機率由高到低做 NMS。
+
+    同一個空位常同時出現「空隙候選」和「偵測框候選」兩個重疊的框，不去重的話一個空位會回報兩次。
+    """
+    order = [i for i in np.argsort(-probs) if probs[i] >= threshold]
+    kept: list[GapCandidate] = []
+    for i in order:
+        c = cands[i]
+        box = (c.x1, c.y1, c.x2, c.y2)
+        if all(box_iou(box, (k.x1, k.y1, k.x2, k.y2)) < nms_iou for k in kept):
+            kept.append(c)
+    return kept
 
 
 def analyze_shelf(
@@ -115,47 +283,58 @@ def analyze_shelf(
     row_tolerance: float = 0.5,
     min_row_items: int = 3,
     texture_ratio: float = 0.5,
+    classifier: GapClassifier | None = None,
 ) -> ShelfAnalysis:
-    """texture_ratio：候選空位的邊緣密度低於「同層商品中位密度 x texture_ratio」才算空位。"""
+    """有 image 與 classifier 時用分類器（v2）；只有 image 時用紋理規則（v1）；
+    兩者都沒有時只看空隙寬度。
+
+    texture_ratio（v1）：候選空位的邊緣密度低於「同層商品中位密度 x texture_ratio」才算空位。
+    """
     if not boxes:
         return ShelfAnalysis(item_count=0, row_count=0)
-    rows = [r for r in group_rows(boxes, row_tolerance) if len(r) >= min_row_items]
+    rows = shelf_rows(boxes, row_tolerance, min_row_items)
     if not rows:
         return ShelfAnalysis(item_count=len(boxes), row_count=0)
 
-    edge_density = EdgeDensity(image) if image is not None else None
+    stats = RegionStats(image) if image is not None else None
+    if classifier is not None and stats is not None:
+        cands = gap_candidates(boxes, rows, classifier.min_gap_factor, include_detections=True)
+        probs = classifier.proba(candidate_features(cands, rows, stats))
+        chosen = select_gaps(cands, probs, classifier.threshold)
+    else:
+        cands = gap_candidates(boxes, rows, min_gap_factor, include_detections=False)
+        chosen = []
+        for c in cands:
+            if stats is not None:
+                row = rows[c.row]
+                ref = float(np.median([stats.edge(b.x1, b.y1, b.x2, b.y2) for b in row]))
+                if ref > 0 and stats.edge(c.x1, c.y1, c.x2, c.y2) >= ref * texture_ratio:
+                    continue
+            chosen.append(c)
+
+    # 被判成空位的偵測框不算商品
+    gap_boxes = {c.box_index for c in chosen if c.box_index is not None}
+    gaps = [Gap(c.x1, c.y1, c.x2, c.y2, c.row) for c in chosen]
     shelf_x1 = min(b.x1 for r in rows for b in r)
     shelf_x2 = max(b.x2 for r in rows for b in r)
-    gaps: list[Gap] = []
+    index = {id(b): i for i, b in enumerate(boxes)}
     gap_width = row_width = covered_area = row_area = 0.0
     for idx, row in enumerate(rows):
-        med_w = float(np.median([b.width for b in row]))
-        # 以中位數決定這一層的上下緣，比 min/max 更不受單一異常框影響
         y1 = float(np.median([b.y1 for b in row]))
         y2 = float(np.median([b.y2 for b in row]))
-        ref = (
-            float(np.median([edge_density(b.x1, b.y1, b.x2, b.y2) for b in row]))
-            if edge_density
-            else 0.0
-        )
-        occupied = _merge_intervals([(b.x1, b.x2) for b in row])
-        cursor = shelf_x1
-        for a, b in [*occupied, (shelf_x2, shelf_x2)]:
-            if a - cursor >= med_w * min_gap_factor and not (
-                edge_density and ref > 0 and edge_density(cursor, y1, a, y2) >= ref * texture_ratio
-            ):
-                gaps.append(Gap(cursor, y1, a, y2, idx))
-                gap_width += a - cursor
-            cursor = max(cursor, b)
+        items = [b for b in row if index[id(b)] not in gap_boxes]
+        occupied = _merge_intervals([(b.x1, b.x2) for b in items])
+        row_gaps = _merge_intervals([(g.x1, g.x2) for g in gaps if g.row == idx])
+        gap_width += sum(b - a for a, b in row_gaps)
         row_width += shelf_x2 - shelf_x1
-        covered_area += sum((b - a) for a, b in occupied) * (y2 - y1)
+        covered_area += sum(b - a for a, b in occupied) * (y2 - y1)
         row_area += (shelf_x2 - shelf_x1) * (y2 - y1)
 
     return ShelfAnalysis(
-        item_count=len(boxes),
+        item_count=len(boxes) - len(gap_boxes),
         row_count=len(rows),
         gaps=gaps,
-        gap_ratio=round(gap_width / row_width, 4) if row_width > 0 else 0.0,
+        gap_ratio=round(min(1.0, gap_width / row_width), 4) if row_width > 0 else 0.0,
         # 密度：各層商品實際佔用的面積比例（0 到 1）
         density=round(covered_area / row_area, 4) if row_area > 0 else 0.0,
     )
