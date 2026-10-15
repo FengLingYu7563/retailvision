@@ -108,7 +108,105 @@
     "recall": 0.8317
   },
   "gaps": {
-    "status": "pending_annotation"
+    "acceptance_1_8": false,
+    "gt_gaps": 94,
+    "iou_threshold": 0.3,
+    "n_images": 15,
+    "n_reviewed_images": 15,
+    "per_image": [
+      {
+        "gt": 8,
+        "hit": 6,
+        "image": "test_0.jpg",
+        "pred": 6
+      },
+      {
+        "gt": 10,
+        "hit": 3,
+        "image": "test_1.jpg",
+        "pred": 4
+      },
+      {
+        "gt": 4,
+        "hit": 1,
+        "image": "test_100.jpg",
+        "pred": 1
+      },
+      {
+        "gt": 4,
+        "hit": 1,
+        "image": "test_1000.jpg",
+        "pred": 2
+      },
+      {
+        "gt": 6,
+        "hit": 1,
+        "image": "test_1001.jpg",
+        "pred": 2
+      },
+      {
+        "gt": 2,
+        "hit": 0,
+        "image": "test_1003.jpg",
+        "pred": 3
+      },
+      {
+        "gt": 5,
+        "hit": 1,
+        "image": "test_1004.jpg",
+        "pred": 4
+      },
+      {
+        "gt": 7,
+        "hit": 0,
+        "image": "test_1006.jpg",
+        "pred": 1
+      },
+      {
+        "gt": 24,
+        "hit": 4,
+        "image": "test_1007.jpg",
+        "pred": 5
+      },
+      {
+        "gt": 2,
+        "hit": 2,
+        "image": "test_1009.jpg",
+        "pred": 2
+      },
+      {
+        "gt": 3,
+        "hit": 0,
+        "image": "test_101.jpg",
+        "pred": 0
+      },
+      {
+        "gt": 9,
+        "hit": 4,
+        "image": "test_1011.jpg",
+        "pred": 5
+      },
+      {
+        "gt": 5,
+        "hit": 1,
+        "image": "test_1012.jpg",
+        "pred": 1
+      },
+      {
+        "gt": 2,
+        "hit": 0,
+        "image": "test_1014.jpg",
+        "pred": 3
+      },
+      {
+        "gt": 3,
+        "hit": 0,
+        "image": "test_1015.jpg",
+        "pred": 1
+      }
+    ],
+    "predicted_gaps": 40,
+    "recall": 0.2553
   },
   "retrieval": {
     "acceptance_1_7": false,

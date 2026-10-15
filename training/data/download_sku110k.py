@@ -113,6 +113,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--connections", type=int, default=16)
     args = parser.parse_args()
+    if (DEST / "annotations").exists() and (DEST / "images").exists():
+        # 已解壓就不再下載：壓縮檔解壓後可以刪除省 12 GB，不該因此重新下載
+        print(f"SKU-110K 已存在：{DEST}")
+        return 0
     download(args.connections)
     extract()
     print(f"SKU-110K 就緒：{DEST}")
