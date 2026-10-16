@@ -145,18 +145,27 @@ def review() -> None:
     cv2.destroyAllWindows()
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
+def main(argv: list[str] | None = None) -> None:
+    # --set 放在子指令前後都可以（`--set tune review` 或 `review --set tune`）。
+    # 子指令那層用 SUPPRESS：沒寫的時候不會蓋掉上層的值。
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--set",
+        choices=sorted(SETS),
+        default=argparse.SUPPRESS,
+        help="eval：評估集（SKU test）；tune：調參集（SKU val）",
+    )
+    ap = argparse.ArgumentParser(parents=[common])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("propose")
+    p = sub.add_parser("propose", parents=[common])
     p.add_argument("--n", type=int, default=15)
     p.add_argument("--scan", type=int, default=600)
     p.add_argument("--min-density", type=float, default=0.5)
-    sub.add_parser("review")
-    ap.add_argument("--set", choices=sorted(SETS), default="eval")
-    args = ap.parse_args()
+    sub.add_parser("review", parents=[common])
+    args = ap.parse_args(argv)
     global OUT, SPLIT_FILE
-    OUT, SPLIT_FILE = SETS[args.set]
+    # 不用 set_defaults：parents 會讓各層共用同一個參數物件，設了預設值子指令會把上層的值蓋掉
+    OUT, SPLIT_FILE = SETS[getattr(args, "set", "eval")]
     if args.cmd == "propose":
         propose(args.n, args.scan, args.min_density)
     else:

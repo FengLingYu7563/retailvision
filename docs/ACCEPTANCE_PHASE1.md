@@ -39,6 +39,9 @@
 | 偵測框被判成空位時，item_count、density、gap_ratio 一致且 NMS 去重 | L1 | `tests/unit/test_shelf.py` |
 | README 與 docs 的數字和 `models/metrics.json` 一致（每次評估更新後核對） | L3 | 人工檢查 |
 | 1.7 保留類別實驗：訓練、驗證、選 checkpoint、擴增、背景素材都不讀取保留類別的任何圖 | L1 | `tests/unit/test_holdout_isolation.py` |
+| 1.8 空位分類器的交叉驗證以「圖」為單位切分（同一張圖的候選不會同時在訓練與驗證） | L1 | `training/fit_gap_classifier.py`（leave-one-image-out） |
+| `annotate_gaps --set tune/eval` 分別對應 SKU val / test，參數放在子指令前後都正確 | L1 | `tests/unit/test_annotate_cli.py` |
+| 評估集跑過並看過結果後，之後任何方法變更都必須用全新的評估集 | L1 | 方法規定（見 `docs/experiments/gaps_1_8.md`） |
 
 ## 重做 1.7 / 1.8 的方法規定（使用者 2026-10-15 決定：不接受第一版進 Phase 2）
 

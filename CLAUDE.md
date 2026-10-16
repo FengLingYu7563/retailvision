@@ -59,11 +59,13 @@ Phase 1 進行中（最新 commit 見 `git log`），使用者不接受有未達
   CNN 特徵、多種形狀的候選都沒有幫助（後者已還原）。紀錄在 `docs/experiments/gaps_1_8.md` 第三輪。
 - 使用者決定用最佳設定（GBT、召回優先門檻 0.35）跑評估集一次：召回 56.4%、精確 38.7%（v1 26.6%），
   1.8（L3）記錄為未達標。上線貨架分析用 v2 分類器（`models/gap_classifier.joblib` + `.json`），CPU p95 212 ms。
+- Codex 第 5 到 7 輪：修正 joblib 載入安全（先驗 SHA-256、限定資料夾）、1.7 保留類別實驗的洩漏（重訓後沒看過的類別 47.0% / top-5 92.7%）、
+  annotate_gaps 的 --set 位置。第 7 輪 PASS，Phase 1 完成。
+- 方法規定：15 張評估集已用來報告最終結果，之後任何方法變更都要另標全新的評估集。
 
 ## Todos
 
-1. Phase 1 收尾：重跑 Codex 審查（本輪新增 train_metric、DINOv2、空位分類器 v2）。
-2. 跟使用者確認後進 Phase 2（API 與資料庫）。
+1. 跟使用者確認後進 Phase 2（API 與資料庫）。Phase 1 的 Codex 審查已 PASS（第 7 輪）。
 3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
 4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
 
