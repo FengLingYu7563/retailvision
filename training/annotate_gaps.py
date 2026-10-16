@@ -9,6 +9,9 @@ SKU-110K 沒有空位標註，所以分兩步：
    上下堆疊：同一層隔板上旁邊的商品堆兩層、只有某格上層空掉時，框上層空掉的那一塊
    （shelf.py 依框的高度分層，上下堆疊會被分成兩層，標註要和這個判斷方式一致）；
    整條隔板本來就只放一層、看不出能堆兩層時不框。判斷不出來就不框。
+   前排有商品、後排空（商品被往前推）：不框。這是「庫存偏低」不是「缺貨空位」，
+   正面照片看不到後排深度，框了會讓標註標準不一致；但若前排本身也露出空位（看得到層板）就要框。
+   判斷原則：正面看過去，那個位置有沒有看到商品。
 
 review 操作：
   左鍵拖曳     新增空位框
@@ -91,7 +94,8 @@ def review() -> None:
     if not items:
         print("沒有候選圖，先執行 propose")
         return
-    i = 0
+    # 從第一張還沒確認的圖開始，中斷後重開或追加候選時不用從頭按過已標好的圖
+    i = next((k for k, it in enumerate(items) if not it.get("reviewed")), 0)
     state: dict[str, Any] = {}
 
     def on_mouse(event: int, x: int, y: int, _flags: int, _param: Any) -> None:
