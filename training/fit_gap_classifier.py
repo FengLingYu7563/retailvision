@@ -6,10 +6,12 @@
 2. Leave-one-image-out 交叉驗證：每次留一張圖，用其他圖訓練、預測留下的那張。
    門檻依交叉驗證的「端到端」召回率與精確率選（和正式評估同樣用一對一配對），
    不是依訓練資料上的分數選，否則會高估。
-3. 用全部調參圖訓練最終模型，存成 models/gap_classifier.json（只有十幾個數字，可以 commit）。
+3. 用全部調參圖訓練最終模型，存成 models/gap_classifier.joblib（模型，不 commit）
+   與 models/gap_classifier.json（門檻與設定，commit）。
 
-為什麼用 logistic regression：正樣本只有幾十個，特徵只有 6 個；
-參數越少越不容易對 10 張圖過擬合，係數也能直接解讀（例如越暗越像空位）。
+模型選擇（40 張調參集、236 個空位的 CV，紀錄在 docs/experiments/gaps_1_8.md 第三輪）：
+梯度提升樹（深度 4、300 輪）在召回 >= 70% 時精確率 37%，高於 logistic regression 的 32%。
+門檻依使用者決定採「召回優先」：CV 召回 >= 70% 的門檻中，選精確率最高的那個。
 """
 
 from __future__ import annotations
@@ -19,14 +21,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 from training.common import DATA, MODELS, SKU, update_metrics
 from vision.detector import OnnxDetector
 from vision.io import load_image
 from vision.shelf import (
-    FEATURE_NAMES,
     GapCandidate,
     GapClassifier,
     RegionStats,
@@ -42,8 +42,16 @@ from vision.shelf import (
 TUNE = DATA / "gap_annotations_tune.json"
 OUT = MODELS / "gap_classifier.json"
 MIN_GAP_FACTOR = 0.4
-TARGET_RECALL = 0.75  # 比驗收門檻 70% 多留一點餘裕，因為評估集和調參集不同
-C = 1.0
+TARGET_RECALL = 0.70  # 召回優先：和驗收門檻相同（CV 上到不了 0.75，見實驗紀錄）
+GBT_PARAMS: dict[str, Any] = {
+    "max_depth": 4,
+    "max_iter": 300,
+    "learning_rate": 0.05,
+    # class_weight="balanced"：候選裡大部分是商品框，不平衡的話模型會傾向全部判成「不是空位」
+    "class_weight": "balanced",
+    "l2_regularization": 1.0,
+    "random_state": 0,
+}
 
 
 @dataclass
@@ -87,11 +95,8 @@ def load_images() -> list[ImageData]:
     return out
 
 
-def fit(X: np.ndarray, y: np.ndarray) -> tuple[StandardScaler, LogisticRegression]:
-    scaler = StandardScaler().fit(X)
-    # class_weight="balanced"：候選裡大部分是商品框，不平衡的話模型會傾向全部判成「不是空位」
-    lr = LogisticRegression(C=C, class_weight="balanced", max_iter=1000).fit(scaler.transform(X), y)
-    return scaler, lr
+def fit(X: np.ndarray, y: np.ndarray) -> HistGradientBoostingClassifier:
+    return HistGradientBoostingClassifier(**GBT_PARAMS).fit(X, y)
 
 
 def end_to_end(
@@ -127,8 +132,7 @@ def main() -> None:
     for i, d in enumerate(data):
         X = np.vstack([o.X for j, o in enumerate(data) if j != i])
         y = np.concatenate([o.y for j, o in enumerate(data) if j != i])
-        scaler, lr = fit(X, y)
-        cv_probs.append(lr.predict_proba(scaler.transform(d.X))[:, 1])
+        cv_probs.append(fit(X, y).predict_proba(d.X)[:, 1])
 
     table = []
     for t in np.round(np.arange(0.05, 0.96, 0.05), 2):
@@ -154,26 +158,22 @@ def main() -> None:
         f"精確 {chosen['precision']:.1%}）"
     )
 
-    scaler, lr = fit(np.vstack([d.X for d in data]), np.concatenate([d.y for d in data]))
+    model = fit(np.vstack([d.X for d in data]), np.concatenate([d.y for d in data]))
     clf = GapClassifier(
-        mean=scaler.mean_.tolist(),
-        scale=scaler.scale_.tolist(),
-        coef=lr.coef_[0].tolist(),
-        intercept=float(lr.intercept_[0]),
+        estimator=model,
         threshold=float(chosen["threshold"]),
         min_gap_factor=MIN_GAP_FACTOR,
+        kind="gbt",
     )
     clf.save(OUT)
-    coef = dict(zip(FEATURE_NAMES, np.round(lr.coef_[0], 3).tolist(), strict=True))
-    print(f"係數（標準化後）：{coef}")
     report: dict[str, Any] = {
         "n_images": len(data),
         "n_gt_gaps": n_gt,
         "v1_rule_recall": round(v1_hit / n_gt, 4),
         "cv_table": table,
         "chosen": chosen,
-        "coef": coef,
-        "C": C,
+        "model": {"kind": "gbt", **{k: v for k, v in GBT_PARAMS.items()}},
+        "target_recall": TARGET_RECALL,
         "min_gap_factor": MIN_GAP_FACTOR,
     }
     update_metrics("gap_classifier_tuning", report)

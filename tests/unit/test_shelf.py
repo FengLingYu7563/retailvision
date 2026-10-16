@@ -65,6 +65,35 @@ def test_texture_check_keeps_real_gap() -> None:
     assert len(a.gaps) == 1
 
 
+def test_classifier_mode_save_load_and_analyze(tmp_path) -> None:
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    from vision.shelf import (
+        FEATURE_NAMES,
+        GapClassifier,
+        RegionStats,
+        candidate_features,
+        gap_candidates,
+        shelf_rows,
+    )
+
+    img, boxes = _textured_shelf(gap_textured=False)
+    rows = shelf_rows(boxes)
+    cands = gap_candidates(boxes, rows, 0.4, include_detections=True)
+    X = candidate_features(cands, rows, RegionStats(img))
+    assert X.shape == (len(cands), len(FEATURE_NAMES))
+    # 用「是不是空隙候選」當標籤訓練一個小模型，只測流程，不測準確率
+    y = np.array([c.box_index is None for c in cands], dtype=int)
+    est = HistGradientBoostingClassifier(max_iter=20, min_samples_leaf=1).fit(
+        np.vstack([X] * 5), np.concatenate([y] * 5)
+    )
+    GapClassifier(est, threshold=0.5).save(tmp_path / "gap.json")
+    clf = GapClassifier.load(tmp_path / "gap.json")
+    a = analyze_shelf(boxes, img.shape, image=img, classifier=clf)
+    assert len(a.gaps) == 1
+    assert a.item_count == len(boxes)
+
+
 def test_texture_check_rejects_missed_product() -> None:
     img, boxes = _textured_shelf(gap_textured=True)
     assert len(analyze_shelf(boxes, img.shape).gaps) == 1  # 沒有影像時無法分辨

@@ -57,15 +57,15 @@ Phase 1 進行中（最新 commit 見 `git log`），使用者不接受有未達
 - 使用者選擇方案 1：再標 30 張調參集（SKU-110K val），已完成，共 40 張、236 個空位。
   三次嘗試後再次觸發停止條件：最好的是 GBT（深度 4、300 輪），CV 召回 70.3% 時精確率 37%。
   CNN 特徵、多種形狀的候選都沒有幫助（後者已還原）。紀錄在 `docs/experiments/gaps_1_8.md` 第三輪。
-  評估集 15 張仍未使用，等使用者決定下一步。
+- 使用者決定用最佳設定（GBT、召回優先門檻 0.35）跑評估集一次：召回 56.4%、精確 38.7%（v1 26.6%），
+  1.8（L3）記錄為未達標。上線貨架分析用 v2 分類器（`models/gap_classifier.joblib` + `.json`），CPU p95 212 ms。
 
 ## Todos
 
-1. 等使用者決定 1.8 下一步（見 `docs/experiments/gaps_1_8.md` 第三輪）。
-2. 決定後若要正式評估：`training/fit_gap_classifier.py` 改用 GBT（深度 4、300 輪；目前只支援 LR），
-   在評估集 15 張（`gap_annotations.json`）跑一次 `python -m training.evaluate --only gaps`，更新 README 與實驗紀錄。
-3. 仍未達標時，依規格把 1.8（L3）記錄為未達標並附紀錄，跟使用者確認後進 Phase 2。
-5. Phase 1 收尾：重跑 Codex 審查；L3 待辦是分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+1. Phase 1 收尾：重跑 Codex 審查（本輪新增 train_metric、DINOv2、空位分類器 v2）。
+2. 跟使用者確認後進 Phase 2（API 與資料庫）。
+3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
 
 ## Important Decisions
 

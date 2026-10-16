@@ -33,7 +33,7 @@ from vision.detector import OnnxDetector
 from vision.embedder import EmbeddingIndex
 from vision.io import load_image
 from vision.preprocess import to_classifier_input
-from vision.shelf import analyze_shelf, gap_recall
+from vision.shelf import GapClassifier, analyze_shelf, gap_recall
 
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
@@ -43,6 +43,7 @@ CLS_CKPT = CHECKPOINTS / "classifier_dino_metric" / "best.pt"
 HOLDOUT_CKPT = CHECKPOINTS / "metric_dino_holdout20" / "best.pt"
 DET_VERSION = "det-yolov8n-v1"
 GAP_ANNOTATIONS = DATA / "gap_annotations.json"
+GAP_CLASSIFIER = MODELS / "gap_classifier.json"
 
 
 def percentile_ms(samples: list[float]) -> dict[str, float]:
@@ -331,19 +332,33 @@ def eval_detector() -> None:
     metrics["onnx_mAP50"] = round(float(onnx_res.box.map50), 4)
     metrics["onnx_mAP50_95"] = round(float(onnx_res.box.map), 4)
     metrics["acceptance_1_5"] = min(metrics["mAP50"], metrics["onnx_mAP50"]) >= 0.75
+    metrics["latency_ms_cpu_onnx_detect_and_analyze"] = shelf_latency()
+    update_metrics("detector", metrics)
+    print(json.dumps(metrics, indent=2))
 
+
+def shelf_latency() -> dict[str, float]:
+    """偵測 + 貨架分析（含空位分類器，也就是上線時的完整流程）的 CPU 延遲。"""
     det = OnnxDetector(MODELS / f"{DET_VERSION}.onnx")
+    clf = GapClassifier.load(GAP_CLASSIFIER) if GAP_CLASSIFIER.exists() else None
     names = (DATA / "splits" / "sku110k_test.txt").read_text().split()[:20]
     imgs = [load_image(DATA / "raw" / "SKU110K_fixed" / "images" / n) for n in names]
-    det.detect(imgs[0])
+    analyze_shelf(det.detect(imgs[0]), imgs[0].shape, image=imgs[0], classifier=clf)
     times = []
     for img in imgs:
         t = time.perf_counter()
-        analyze_shelf(det.detect(img), img.shape, image=img)
+        analyze_shelf(det.detect(img), img.shape, image=img, classifier=clf)
         times.append(time.perf_counter() - t)
-    metrics["latency_ms_cpu_onnx_detect_and_analyze"] = percentile_ms(times)
-    update_metrics("detector", metrics)
-    print(json.dumps(metrics, indent=2))
+    return percentile_ms(times)
+
+
+def eval_shelf_latency() -> None:
+    """只更新 detector 區塊的延遲欄位，不重跑 mAP。"""
+    data = json.loads(METRICS.read_text(encoding="utf-8")) if METRICS.exists() else {}
+    section = data.get("detector", {})
+    section["latency_ms_cpu_onnx_detect_and_analyze"] = shelf_latency()
+    update_metrics("detector", section)
+    print(json.dumps(section["latency_ms_cpu_onnx_detect_and_analyze"]))
 
 
 def eval_gaps() -> None:
@@ -353,17 +368,24 @@ def eval_gaps() -> None:
         return
     ann = json.loads(GAP_ANNOTATIONS.read_text(encoding="utf-8"))
     det = OnnxDetector(MODELS / f"{DET_VERSION}.onnx")
+    # 驗收值用 v2 分類器（只用調參集訓練與選門檻）；v1 規則一起算出來當對照
+    clf = GapClassifier.load(GAP_CLASSIFIER)
     hit = total = n_pred = 0
+    v1_hit = v1_pred = 0
     per_image = []
     for item in ann["images"]:
         if not item.get("reviewed"):
             continue
         img = load_image(DATA / "raw" / "SKU110K_fixed" / "images" / item["image"])
-        analysis = analyze_shelf(det.detect(img), img.shape, image=img)
+        boxes = det.detect(img)
+        analysis = analyze_shelf(boxes, img.shape, image=img, classifier=clf)
         pred = [(g.x1, g.y1, g.x2, g.y2) for g in analysis.gaps]
         gt = [tuple(g) for g in item["gaps"]]
         h, t = gap_recall(pred, gt)  # type: ignore[arg-type]
         hit, total, n_pred = hit + h, total + t, n_pred + len(pred)
+        v1 = [(g.x1, g.y1, g.x2, g.y2) for g in analyze_shelf(boxes, img.shape, image=img).gaps]
+        v1_hit += gap_recall(v1, gt)[0]  # type: ignore[arg-type]
+        v1_pred += len(v1)
         per_image.append({"image": item["image"], "hit": h, "gt": t, "pred": len(pred)})
     # 驗收要求「至少 10 張人工標註空位的貨架圖」：只算確實標了空位的圖，
     # 已確認但沒有空位的圖另外列出（它們仍會貢獻誤報，但不能拿來湊張數）
@@ -378,6 +400,12 @@ def eval_gaps() -> None:
         "gt_gaps": total,
         "predicted_gaps": n_pred,
         "recall": round(hit / total, 4) if total else None,
+        "precision": round(hit / n_pred, 4) if n_pred else None,
+        "method": f"v2 classifier ({clf.kind}, threshold {clf.threshold})",
+        "v1_rule": {
+            "recall": round(v1_hit / total, 4) if total else None,
+            "precision": round(v1_hit / v1_pred, 4) if v1_pred else None,
+        },
         "iou_threshold": 0.3,
         "per_image": per_image,
         "acceptance_1_8": bool(n_images >= 10 and total and hit / total >= 0.70),
@@ -395,6 +423,7 @@ def main() -> None:
         "retrieval": eval_retrieval,
         "holdout": eval_holdout,
         "detector": eval_detector,
+        "shelf_latency": eval_shelf_latency,
         "gaps": eval_gaps,
     }
     for name in args.only.split(","):

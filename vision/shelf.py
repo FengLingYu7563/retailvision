@@ -8,7 +8,7 @@
      而且邊緣密度低於同層商品的 texture_ratio 倍。
    - 分類器（v2，傳入 GapClassifier 時）：候選放寬到 0.4 個商品寬，並把**偵測框本身**也當候選
      （偵測器會把空格裡的暗色背板誤框成商品）。對每個候選算出「和同層商品比較」的外觀特徵
-     （亮度、飽和度、邊緣密度、寬度），用 logistic regression 判斷。
+     （亮度、飽和度、邊緣密度、寬度、偵測信心等），用梯度提升樹判斷。
      分類器只用調參集訓練，見 training/fit_gap_classifier.py。
 
 為什麼特徵都用「和同層商品的比值」：不同照片的曝光、白平衡差很多，
@@ -22,8 +22,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import cv2
+import joblib
 import numpy as np
 from numpy.typing import NDArray
 
@@ -155,30 +157,46 @@ class RegionStats:
 
 @dataclass(frozen=True)
 class GapClassifier:
-    """標準化 + logistic regression，參數存成 JSON（由 training/fit_gap_classifier.py 產生）。"""
+    """sklearn 分類器（有 predict_proba 即可）+ 門檻，由 training/fit_gap_classifier.py 產生。
 
-    mean: list[float]
-    scale: list[float]
-    coef: list[float]
-    intercept: float
+    存成兩個檔：`.joblib` 是模型本身（和其他權重一樣不 commit），
+    `.json` 是門檻、候選設定與特徵名稱（可以 commit，方便追蹤上線用的是哪組設定）。
+    改用梯度提升樹的原因：40 張調參集的交叉驗證中，召回 70% 時精確率 37%，高於 LR 的 32%。
+    """
+
+    estimator: Any
     threshold: float
     min_gap_factor: float = 0.4
+    kind: str = "gbt"
 
     def proba(self, features: NDArray[np.float64]) -> NDArray[np.float64]:
-        z = (features - np.array(self.mean)) / np.array(self.scale)
-        logit = z @ np.array(self.coef) + self.intercept
-        return np.asarray(1.0 / (1.0 + np.exp(-logit)), dtype=np.float64)
+        if len(features) == 0:
+            return np.zeros(0, dtype=np.float64)
+        return np.asarray(self.estimator.predict_proba(features)[:, 1], dtype=np.float64)
 
     def save(self, path: str | Path) -> None:
-        d = {**self.__dict__, "feature_names": FEATURE_NAMES}
-        Path(path).write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+        path = Path(path)
+        joblib.dump(self.estimator, path.with_suffix(".joblib"))
+        meta = {
+            "kind": self.kind,
+            "threshold": self.threshold,
+            "min_gap_factor": self.min_gap_factor,
+            "feature_names": FEATURE_NAMES,
+        }
+        path.with_suffix(".json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> GapClassifier:
-        d = json.loads(Path(path).read_text(encoding="utf-8"))
-        if d.pop("feature_names", FEATURE_NAMES) != FEATURE_NAMES:
+        path = Path(path)
+        meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+        if meta.get("feature_names") != FEATURE_NAMES:
             raise ValueError("分類器的特徵定義和程式不一致，需要重新訓練")
-        return cls(**d)
+        return cls(
+            estimator=joblib.load(path.with_suffix(".joblib")),
+            threshold=float(meta["threshold"]),
+            min_gap_factor=float(meta["min_gap_factor"]),
+            kind=str(meta["kind"]),
+        )
 
 
 def shelf_rows(
