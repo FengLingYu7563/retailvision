@@ -38,6 +38,7 @@
 | 空位分類器（joblib / pickle）只載入專案產生的檔案：先驗 SHA-256 再反序列化，可限定資料夾 | L2 | `tests/unit/test_shelf.py` |
 | 偵測框被判成空位時，item_count、density、gap_ratio 一致且 NMS 去重 | L1 | `tests/unit/test_shelf.py` |
 | README 與 docs 的數字和 `models/metrics.json` 一致（每次評估更新後核對） | L3 | 人工檢查 |
+| 1.7 保留類別實驗：訓練、驗證、選 checkpoint、擴增、背景素材都不讀取保留類別的任何圖 | L1 | `tests/unit/test_holdout_isolation.py` |
 
 ## 重做 1.7 / 1.8 的方法規定（使用者 2026-10-15 決定：不接受第一版進 Phase 2）
 
@@ -61,6 +62,6 @@
 | 1.4 | v2 細類 95.1% / top-5 99.8% / 粗類 96.7%（v1：85.7% / 98.2% / 90.5%） | 通過 |
 | 1.5 | mAP50 0.903（pt）/ 0.900（ONNX） | 通過 |
 | 1.6 | v1、v2 logits 誤差 < 1e-3，top-1 一致 100% | 通過 |
-| 1.7 | v2 top-1 95.3%（v1：52.8%）；沒看過的 20 類 48.5% / top-5 92.9% | 通過，見 `docs/experiments/retrieval_1_7.md` |
+| 1.7 | v2 top-1 95.3%（v1：52.8%）；沒看過的 20 類 47.0% / top-5 92.7% | 通過，見 `docs/experiments/retrieval_1_7.md` |
 | 1.8 | v2 召回率 56.4%、精確率 38.7%（15 張、94 個空位；v1 為 26.6%） | **未達標（L3）**，見 `docs/experiments/gaps_1_8.md` |
 | 1.9 | 混淆矩陣與前 3 組分析 | 通過（待人工檢查） |

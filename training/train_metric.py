@@ -176,33 +176,62 @@ def embed_all(model: torch.nn.Module, imgs: list[np.ndarray], device: torch.devi
 
 
 @torch.no_grad()
+def prepare_data(
+    holdout: list[int],
+) -> tuple[list[Sample], list[Sample], dict[int, np.ndarray], list[np.ndarray]]:
+    """回傳 (train, val, 標準圖 {類別: 影像}, 背景素材)，全部排除保留類別。
+
+    保留類別的任何圖（train、val、標準圖）在訓練程式裡都不讀取，只在 evaluate.py 的
+    eval_holdout 最後評估時才用到；背景素材也只從排除後的 train 抽。
+    tests/unit/test_holdout_isolation.py 會攔截 load_image 檢查這一點。
+    """
+    meta = grocery_meta()
+    train = [s for s in grocery_split("train") if s.fine_id not in holdout]
+    val = [s for s in grocery_split("val") if s.fine_id not in holdout]
+    iconic = {
+        f: load_image(GROCERY / rel)
+        for f, rel in enumerate(meta["iconic_images"])
+        if f not in holdout
+    }
+    # 換背景用的素材：實拍照模糊後當背景，只保留色調與明暗、不保留可辨識的商品
+    bg_rng = random.Random(SEED)
+    backgrounds = [
+        cv2.GaussianBlur(resize_short_side(load_image(s.path), 256), (0, 0), 8)
+        for s in bg_rng.sample(train, 60)
+    ]
+    return train, val, iconic, backgrounds
+
+
+@torch.no_grad()
 def val_metrics(
     model: torch.nn.Module,
     val: list[Sample],
     val_imgs: list[np.ndarray],
-    iconic_imgs: list[np.ndarray],
+    iconic: dict[int, np.ndarray],
     device: torch.device,
-    holdout: list[int],
 ) -> dict[str, float]:
-    """val 上的分類 top-1，以及「每類 1 張標準圖」gallery 的檢索 top-1（嚴格定義）。"""
+    """val 上的分類 top-1，以及「每類 1 張標準圖」gallery 的檢索 top-1（嚴格定義）。
+
+    呼叫端只會傳入訓練範圍內的類別（--holdout 時已排除保留類別的 val 圖與標準圖）：
+    保留類別的圖不能出現在 query，也不能出現在 gallery 當干擾項，
+    否則 checkpoint 的選擇就間接用到了「沒看過」的類別（Codex 第 6 輪審查指出的洩漏）。
+    """
     model.eval()
+    ids = sorted(iconic)
     q = embed_all(model, val_imgs, device)
-    g = embed_all(model, iconic_imgs, device)
+    g = embed_all(model, [iconic[i] for i in ids], device)
     y = np.array([s.fine_id for s in val])
-    pred_ret = (q @ g.T).argmax(1)
+    # gallery 的第 k 列是類別 ids[k]，用明確的 ID 對應，不依賴索引剛好等於類別編號
+    pred_ret = np.array(ids)[(q @ g.T).argmax(1)]
     x = torch.from_numpy(np.concatenate([to_classifier_input(im) for im in val_imgs]))
     fine_logits = torch.cat(
         [model(x[i : i + 64].to(device))[0].float().cpu() for i in range(0, len(x), 64)]
     )
     pred_cls = fine_logits.argmax(1).numpy()
-    seen = ~np.isin(y, holdout)
-    m = {
-        "fine_top1": float((pred_cls[seen] == y[seen]).mean()),
-        "retrieval_top1": float((pred_ret[seen] == y[seen]).mean()),
+    return {
+        "fine_top1": float((pred_cls == y).mean()),
+        "retrieval_top1": float((pred_ret == y).mean()),
     }
-    if holdout:
-        m["holdout_retrieval_top1"] = float((pred_ret[~seen] == y[~seen]).mean())
-    return m
 
 
 def main() -> None:
@@ -229,18 +258,8 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     t0 = time.perf_counter()
-    train = [s for s in grocery_split("train") if s.fine_id not in holdout]
-    val = grocery_split("val")
-    iconic_all = [load_image(GROCERY / rel) for rel in meta["iconic_images"]]
-    iconic_train = {
-        f: (img, meta["fine_to_coarse"][f]) for f, img in enumerate(iconic_all) if f not in holdout
-    }
-    # 換背景用的素材：實拍照模糊後當背景，只保留色調與明暗、不保留可辨識的商品
-    bg_rng = random.Random(SEED)
-    backgrounds = [
-        cv2.GaussianBlur(resize_short_side(load_image(s.path), 256), (0, 0), 8)
-        for s in bg_rng.sample(train, 60)
-    ]
+    train, val, iconic, backgrounds = prepare_data(holdout)
+    iconic_train = {f: (img, meta["fine_to_coarse"][f]) for f, img in iconic.items()}
     ds = MetricDataset(train, iconic_train, backgrounds)
     val_imgs = [resize_short_side(load_image(s.path), CACHE_SHORT_SIDE) for s in val]
     sampler = PKSampler(ds, args.p, args.k, SEED)
@@ -288,7 +307,7 @@ def main() -> None:
             ce_sum += float(ce) * len(yf)
             sc_sum += float(sc) * len(yf)
             seen += len(yf)
-        m = val_metrics(model, val, val_imgs, iconic_all, device, holdout)
+        m = val_metrics(model, val, val_imgs, iconic, device)
         rec = {
             "epoch": epoch,
             "stage": stage,

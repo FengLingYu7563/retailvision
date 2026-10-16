@@ -72,7 +72,7 @@ Phase 1 進行中（最新 commit 見 `git log`），使用者不接受有未達
 - Grocery Store 用官方切分；SKU-110K 用 seed 42 子集（train 3000 / val 500 / 完整 test 2936）。
 - 偵測 `max_det=1000`；`cv2.dnn.NMSBoxes` 不可傳 `top_k`（會在 NMS 前截斷候選）。
 - 模糊門檻 30（用訓練集校正，不用常見的 100）。
-- 1.7 嚴格定義：每類 1 張標準圖、1 個向量。A（MobileNetV3+SupCon）與 B（DINOv2+SupCon）在 val 比較後選 B；保留 20 類實驗顯示沒看過的商品 top-1 48.5%、top-5 92.9%，新品登錄 API 要回傳前 k 名。
+- 1.7 嚴格定義：每類 1 張標準圖、1 個向量。A（MobileNetV3+SupCon）與 B（DINOv2+SupCon）在 val 比較後選 B；保留 20 類實驗顯示沒看過的商品 top-1 47.0%、top-5 92.7%，新品登錄 API 要回傳前 k 名。
 - 1.8 標註：調參集來自 SKU val、評估集來自 SKU test，分開使用；預填寬鬆框，避免高估召回率。
   判斷原則是「正面看過去那個位置有沒有商品」：上下堆疊、上層空掉要框；前排有、後排空（往前推）不框，
   那是庫存偏低，正面照片看不到深度（列為延伸方向）。
