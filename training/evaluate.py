@@ -340,7 +340,9 @@ def eval_detector() -> None:
 def shelf_latency() -> dict[str, float]:
     """偵測 + 貨架分析（含空位分類器，也就是上線時的完整流程）的 CPU 延遲。"""
     det = OnnxDetector(MODELS / f"{DET_VERSION}.onnx")
-    clf = GapClassifier.load(GAP_CLASSIFIER) if GAP_CLASSIFIER.exists() else None
+    clf = (
+        GapClassifier.load(GAP_CLASSIFIER, allowed_dir=MODELS) if GAP_CLASSIFIER.exists() else None
+    )
     names = (DATA / "splits" / "sku110k_test.txt").read_text().split()[:20]
     imgs = [load_image(DATA / "raw" / "SKU110K_fixed" / "images" / n) for n in names]
     analyze_shelf(det.detect(imgs[0]), imgs[0].shape, image=imgs[0], classifier=clf)
@@ -369,7 +371,7 @@ def eval_gaps() -> None:
     ann = json.loads(GAP_ANNOTATIONS.read_text(encoding="utf-8"))
     det = OnnxDetector(MODELS / f"{DET_VERSION}.onnx")
     # 驗收值用 v2 分類器（只用調參集訓練與選門檻）；v1 規則一起算出來當對照
-    clf = GapClassifier.load(GAP_CLASSIFIER)
+    clf = GapClassifier.load(GAP_CLASSIFIER, allowed_dir=MODELS)
     hit = total = n_pred = 0
     v1_hit = v1_pred = 0
     per_image = []

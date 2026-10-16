@@ -35,6 +35,9 @@
 | 1.8 召回率用一對一配對；「10 張」只算有標註空位的圖 | L1 | `tests/unit/test_shelf.py`、`training/evaluate.py` |
 | 自寫的 ONNX YOLO 解碼與 Ultralytics 逐框一致 | L1 | `tests/unit/test_detector_parity.py` |
 | 分類器中斷後接續訓練的自動化測試 | L3 | **未實作**（訓練迴圈需先重構） |
+| 空位分類器（joblib / pickle）只載入專案產生的檔案：先驗 SHA-256 再反序列化，可限定資料夾 | L2 | `tests/unit/test_shelf.py` |
+| 偵測框被判成空位時，item_count、density、gap_ratio 一致且 NMS 去重 | L1 | `tests/unit/test_shelf.py` |
+| README 與 docs 的數字和 `models/metrics.json` 一致（每次評估更新後核對） | L3 | 人工檢查 |
 
 ## 重做 1.7 / 1.8 的方法規定（使用者 2026-10-15 決定：不接受第一版進 Phase 2）
 

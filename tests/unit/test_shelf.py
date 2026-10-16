@@ -94,6 +94,59 @@ def test_classifier_mode_save_load_and_analyze(tmp_path) -> None:
     assert a.item_count == len(boxes)
 
 
+class _DarkDetectionIsGap:
+    """假模型：來自偵測框、而且很暗的候選判成空位，其他都不是。"""
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        from vision.shelf import FEATURE_NAMES
+
+        from_det = X[:, FEATURE_NAMES.index("from_detection")] == 1
+        dark = X[:, FEATURE_NAMES.index("brightness_abs")] < 0.2
+        p = (from_det & dark).astype(float)
+        return np.stack([1 - p, p], axis=1)
+
+
+def test_detection_box_classified_as_gap_is_not_counted() -> None:
+    from vision.shelf import GapClassifier
+
+    # 6 個商品框，第 3 個框裡其實是全黑的空格（偵測器把背板框成商品）
+    img = np.full((100, 312, 3), 200, np.uint8)
+    xs = [0, 52, 104, 156, 208, 260]
+    for x in xs:
+        img[10:90, x : x + 50 : 6] = 60
+    img[10:90, 104:154] = 5
+    boxes = [Box(x, 10, x + 50, 90, 0.9) for x in xs]
+    clf = GapClassifier(_DarkDetectionIsGap(), threshold=0.5)
+    a = analyze_shelf(boxes, img.shape, image=img, classifier=clf)
+    full = analyze_shelf(boxes, img.shape)
+    assert a.item_count == 5  # 被判成空位的框不算商品
+    assert len(a.gaps) == 1  # 同一個位置只回報一次（NMS）
+    g = a.gaps[0]
+    assert (g.x1, g.x2) == pytest.approx((104, 154))
+    assert a.density < full.density
+    assert a.gap_ratio == pytest.approx(50 / 310, abs=1e-3)
+
+
+def test_classifier_load_rejects_tampered_or_outside_file(tmp_path) -> None:
+    from sklearn.dummy import DummyClassifier
+
+    from vision.shelf import GapClassifier
+
+    est = DummyClassifier(strategy="prior").fit(np.zeros((4, 1)), [0, 1, 0, 1])
+    path = tmp_path / "models" / "gap.json"
+    path.parent.mkdir()
+    GapClassifier(est, threshold=0.5).save(path)
+    GapClassifier.load(path, allowed_dir=path.parent)  # 正常載入
+
+    with pytest.raises(ValueError, match="模型資料夾以外"):
+        GapClassifier.load(path, allowed_dir=tmp_path / "other")
+
+    # 換掉 .joblib：雜湊不符，必須在反序列化之前就拒絕
+    path.with_suffix(".joblib").write_bytes(b"not the original model")
+    with pytest.raises(ValueError, match="SHA-256"):
+        GapClassifier.load(path)
+
+
 def test_texture_check_rejects_missed_product() -> None:
     img, boxes = _textured_shelf(gap_textured=True)
     assert len(analyze_shelf(boxes, img.shape).gaps) == 1  # 沒有影像時無法分辨

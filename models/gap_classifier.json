@@ -15,5 +15,6 @@
     "det_confidence",
     "at_shelf_edge",
     "log_width_ratio"
-  ]
+  ],
+  "sha256": "b5a55d391ba0adfe16d5bcd44becc9ec8ed9be700ad0d3d1cb08a97c110fd52c"
 }

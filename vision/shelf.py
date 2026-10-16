@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -155,13 +156,24 @@ class RegionStats:
         return self.mean(x1, y1, x2, y2)[2]
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @dataclass(frozen=True)
 class GapClassifier:
     """sklearn 分類器（有 predict_proba 即可）+ 門檻，由 training/fit_gap_classifier.py 產生。
 
     存成兩個檔：`.joblib` 是模型本身（和其他權重一樣不 commit），
-    `.json` 是門檻、候選設定與特徵名稱（可以 commit，方便追蹤上線用的是哪組設定）。
+    `.json` 是門檻、候選設定、特徵名稱與 `.joblib` 的 SHA-256
+    （commit，方便追蹤上線用的是哪組設定）。
     改用梯度提升樹的原因：40 張調參集的交叉驗證中，召回 70% 時精確率 37%，高於 LR 的 32%。
+
+    安全邊界：joblib 底層是 pickle，反序列化時會執行檔案裡的程式碼。
+    只能載入本專案 training/fit_gap_classifier.py 產生的檔案，
+    **絕不可以讓 API 使用者指定路徑或上傳模型**。
+    load 會先比對 SHA-256（記錄在 commit 過的 .json 裡）才反序列化，被換掉的 .joblib 會被拒絕；
+    也可以用 allowed_dir 限制只能從模型資料夾載入。
     """
 
     estimator: Any
@@ -176,23 +188,31 @@ class GapClassifier:
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
-        joblib.dump(self.estimator, path.with_suffix(".joblib"))
+        model_path = path.with_suffix(".joblib")
+        joblib.dump(self.estimator, model_path)
         meta = {
             "kind": self.kind,
             "threshold": self.threshold,
             "min_gap_factor": self.min_gap_factor,
             "feature_names": FEATURE_NAMES,
+            "sha256": _sha256(model_path),
         }
         path.with_suffix(".json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     @classmethod
-    def load(cls, path: str | Path) -> GapClassifier:
-        path = Path(path)
+    def load(cls, path: str | Path, allowed_dir: str | Path | None = None) -> GapClassifier:
+        path = Path(path).resolve()
+        if allowed_dir is not None and not path.is_relative_to(Path(allowed_dir).resolve()):
+            raise ValueError(f"拒絕載入模型資料夾以外的分類器：{path}")
         meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
         if meta.get("feature_names") != FEATURE_NAMES:
             raise ValueError("分類器的特徵定義和程式不一致，需要重新訓練")
+        model_path = path.with_suffix(".joblib")
+        # 先驗證雜湊再反序列化：pickle 一旦載入就已經執行了檔案裡的程式碼，事後檢查沒有意義
+        if "sha256" not in meta or _sha256(model_path) != meta["sha256"]:
+            raise ValueError(f"分類器檔案的 SHA-256 不符，拒絕載入：{model_path}")
         return cls(
-            estimator=joblib.load(path.with_suffix(".joblib")),
+            estimator=joblib.load(model_path),
             threshold=float(meta["threshold"]),
             min_gap_factor=float(meta["min_gap_factor"]),
             kind=str(meta["kind"]),
