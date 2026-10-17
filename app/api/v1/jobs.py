@@ -5,10 +5,10 @@ import uuid
 from fastapi import APIRouter
 from sqlalchemy import select
 
-from app.api.deps import DB, owned_job
+from app.api.deps import DB, error_responses, owned_job
 from app.core.ratelimit import LimitedUser
 from app.db.models import Recognition
-from app.schemas import ErrorResponse, JobOut
+from app.schemas import JobOut
 
 router = APIRouter(tags=["jobs"])
 
@@ -16,7 +16,7 @@ router = APIRouter(tags=["jobs"])
 @router.get(
     "/jobs/{job_id}",
     response_model=JobOut,
-    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    responses=error_responses(404),
 )
 def get_job(job_id: uuid.UUID, user: LimitedUser, db: DB) -> JobOut:
     job = owned_job(db, job_id, user)

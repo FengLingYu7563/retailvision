@@ -15,6 +15,7 @@ class ErrorDetail(BaseModel):
     code: str
     message: str
     request_id: str
+    details: dict[str, Any] | None = None
 
 
 class ErrorResponse(BaseModel):

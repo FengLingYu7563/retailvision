@@ -4,12 +4,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile
 
-from app.api.deps import DB, AppSettings, RegistryDep, StorageDep
+from app.api.deps import DB, AppSettings, RegistryDep, StorageDep, error_responses
 from app.core.errors import AppError
 from app.core.ratelimit import LimitedUser
 from app.core.security import AdminUser
 from app.db.models import CatalogProduct
-from app.schemas import ErrorResponse, Page, ProductOut
+from app.schemas import Page, ProductOut
 from app.services import catalog
 from app.services.uploads import read_and_validate
 
@@ -30,7 +30,7 @@ def _out(db: DB, p: CatalogProduct, version: str) -> ProductOut:
     "/catalog/products",
     status_code=201,
     response_model=ProductOut,
-    responses={c: {"model": ErrorResponse} for c in (400, 401, 409, 413, 415, 422, 503)},
+    responses=error_responses(400, 409, 413, 415, 503),
 )
 async def create_product(
     user: LimitedUser,
@@ -53,7 +53,7 @@ async def create_product(
     return _out(db, product, clf.version)
 
 
-@router.get("/catalog/products", response_model=Page[ProductOut])
+@router.get("/catalog/products", response_model=Page[ProductOut], responses=error_responses())
 def list_products(
     user: LimitedUser,
     db: DB,
@@ -71,11 +71,7 @@ def list_products(
 @router.delete(
     "/catalog/products/{product_id}",
     status_code=204,
-    responses={
-        401: {"model": ErrorResponse},
-        403: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
-    },
+    responses=error_responses(403, 404),
 )
 def delete_product(product_id: int, user: AdminUser, db: DB, storage: StorageDep) -> Response:
     """刪除商品與參考圖。限 admin：刪除會影響所有使用者的辨識結果。"""

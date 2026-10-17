@@ -18,6 +18,14 @@ DB = Annotated[Session, Depends(get_db)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 
 
+def error_responses(*codes: int, auth: bool = True) -> dict[int | str, dict[str, Any]]:
+    """OpenAPI 的錯誤回應：需要登入的端點一律列出 401、422、429（驗收 2.1：文件與實際回應一致）。"""
+    from app.schemas import ErrorResponse
+
+    shared = {401, 422, 429} if auth else {422}
+    return {c: {"model": ErrorResponse} for c in sorted(shared | set(codes))}
+
+
 def get_storage(request: Request) -> Storage:
     storage: Storage = request.app.state.storage
     return storage

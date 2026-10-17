@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,6 +22,8 @@ from app.services.registry import ClassifierLike
 from app.services.uploads import Storage, ValidatedImage
 from vision.embedder import EmbeddingIndex
 from vision.io import Image, decode_image
+
+log = logging.getLogger("app.catalog")
 
 
 @dataclass(frozen=True)
@@ -50,20 +53,29 @@ def create_product(
         raise AppError("VALIDATION_ERROR", "參考圖必須是 1 到 5 張", 422)
     if sku and db.scalar(select(CatalogProduct.id).where(CatalogProduct.sku == sku)):
         raise AppError("CONFLICT", f"SKU {sku} 已存在", 409)
-    product = CatalogProduct(name=name, sku=sku)
-    db.add(product)
-    db.flush()
-    for img in images:
-        path = storage.save(img.data, img.ext, "catalog")
-        db.add(
-            CatalogEmbedding(
-                product_id=product.id,
-                vector=to_bytes(clf.embed(img.image)),
-                image_path=path,
-                model_version=clf.version,
+    saved: list[str] = []
+    try:
+        product = CatalogProduct(name=name, sku=sku)
+        db.add(product)
+        db.flush()
+        for img in images:
+            path = storage.save(img.data, img.ext, "catalog")
+            saved.append(path)
+            db.add(
+                CatalogEmbedding(
+                    product_id=product.id,
+                    vector=to_bytes(clf.embed(img.image)),
+                    image_path=path,
+                    model_version=clf.version,
+                )
             )
-        )
-    db.commit()
+        db.commit()
+    except Exception:
+        # 資料庫寫入失敗（例如 SKU 同時被別人登錄）：回滾並刪掉已存的參考圖，不留孤兒檔案
+        db.rollback()
+        for path in saved:
+            storage.delete(path)
+        raise
     db.refresh(product)
     return product
 
@@ -97,8 +109,12 @@ def delete_product(db: Session, storage: Storage, product_id: int) -> None:
     paths = {e.image_path for e in product.embeddings}
     db.delete(product)
     db.commit()
+    # 先刪資料庫再刪檔案：檔案刪不掉頂多留下孤兒檔案（記 log），不會出現資料庫指向不存在的檔案
     for p in paths:
-        storage.delete(p)
+        try:
+            storage.delete(p)
+        except OSError:
+            log.warning("刪除參考圖失敗：%s", p, exc_info=True)
 
 
 def build_index(db: Session, version: str) -> tuple[EmbeddingIndex | None, dict[int, str]]:

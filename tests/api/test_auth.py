@@ -60,6 +60,27 @@ def test_wrong_secret_and_alg_none_rejected(client: TestClient, user_token: str)
     assert_error(client.get("/api/v1/models", headers=auth("not-a-jwt")), 401, "UNAUTHORIZED")
 
 
+def test_signed_token_with_malformed_claims_401(client: TestClient, user_token: str) -> None:
+    """簽章正確、但 claim 格式不對的 token：一律 401，不能變成 500。"""
+    secret, now = get_settings().jwt_secret, datetime.now(UTC)
+    exp = now + timedelta(minutes=5)
+    bad_payloads = [
+        {"sub": "abc", "exp": exp, "type": "access"},  # sub 不是整數
+        {"sub": "1.5", "exp": exp, "type": "access"},
+        {"sub": str(2**40), "exp": exp, "type": "access"},  # 超出資料庫 integer 範圍
+        {"sub": "0", "exp": exp, "type": "access"},
+        {"sub": "1", "exp": exp, "type": "refresh"},  # type 不對
+        {"sub": "1", "exp": exp},  # 沒有 type
+        {"exp": exp, "type": "access"},  # 沒有 sub
+        {"sub": "1", "type": "access"},  # 沒有 exp
+        {"sub": "999999", "exp": exp, "type": "access"},  # 使用者不存在
+    ]
+    for payload in bad_payloads:
+        tok = jwt.encode(payload, secret, algorithm="HS256")
+        r = client.get("/api/v1/models", headers=auth(tok))
+        assert_error(r, 401, "UNAUTHORIZED")
+
+
 def test_role_comes_from_db_not_token(client: TestClient, user_token: str, db: Session) -> None:
     """token 裡寫 role=admin 也沒用：角色以資料庫為準。"""
     uid = str(db.query(User.id).filter(User.username == "alice").scalar())

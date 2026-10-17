@@ -13,6 +13,7 @@ from app.api.deps import (
     AppSettings,
     RegistryDep,
     StorageDep,
+    error_responses,
     owned_recognition,
     recognition_out,
 )
@@ -20,7 +21,6 @@ from app.core.errors import AppError
 from app.core.ratelimit import LimitedUser
 from app.db.models import Job, Recognition
 from app.schemas import (
-    ErrorResponse,
     JobAccepted,
     Page,
     ProductRecognition,
@@ -29,13 +29,11 @@ from app.schemas import (
     ShelfRecognition,
 )
 from app.services.recognition import recognize_product, recognize_shelf
-from app.services.uploads import read_and_validate, read_limited, sniff_format
+from app.services.uploads import read_and_validate, read_limited, validate_image_bytes
 
 router = APIRouter(tags=["recognitions"])
 
-_ERRORS: dict[int | str, dict[str, Any]] = {
-    code: {"model": ErrorResponse} for code in (400, 401, 413, 415, 422, 429, 503)
-}
+_ERRORS = error_responses(400, 413, 415, 503)
 Strict = Annotated[bool, Query(description="品質不佳時直接回 422 LOW_QUALITY_IMAGE")]
 
 
@@ -82,26 +80,51 @@ async def create_batch(
     settings: AppSettings,
     type: Annotated[Literal["product", "shelf"], Form()] = "product",
 ) -> JobAccepted:
-    """批次辨識：先存檔、建立 job，交給 Celery worker 處理，立即回 202。
+    """批次辨識：先驗證、存檔、建立 job，交給 Celery worker 處理，立即回 202。
 
-    每張圖的格式驗證在 worker 裡做：一張壞圖只會記錄在 item_errors，不會讓整批被拒絕（驗收 2.8）。
-    大小上限仍在這裡檢查，避免把超大檔案寫進硬碟。
+    每張圖在這裡就做完整驗證（大小、格式、像素數），**只有驗證通過的圖才寫進硬碟**；
+    不合格的圖記在 item_errors，不會讓整批被拒絕（驗收 2.8）。
+    佇列送不出去時，job 標成 failed、刪掉已存的檔案，回 503，不留下永遠 pending 的 job。
     """
     if not 1 <= len(files) <= settings.max_batch_files:
         raise AppError("VALIDATION_ERROR", f"一次最多 {settings.max_batch_files} 張", 422)
-    items = []
-    for f in files:
-        data = await read_limited(f, settings.max_upload_bytes)
-        # 存檔用 UUID 與依內容判斷的副檔名；格式不明的先用 .bin 存，worker 會判定為錯誤
-        path = storage.save(data, sniff_format(data) or ".bin", "batch")
-        items.append({"path": path, "filename": f.filename})
-    job = Job(user_id=user.id, type=type, status="pending", total=len(items), item_errors=[])
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for index, f in enumerate(files):
+        try:
+            img = validate_image_bytes(
+                await read_limited(f, settings.max_upload_bytes), f.filename, settings
+            )
+        except AppError as exc:
+            errors.append(
+                {"index": index, "filename": f.filename, "code": exc.code, "message": exc.message}
+            )
+            continue
+        path = storage.save(img.data, img.ext, "batch")
+        items.append({"index": index, "path": path, "filename": f.filename})
+
+    job = Job(
+        user_id=user.id,
+        type=type,
+        status="pending" if items else "done",
+        total=len(files),
+        done_count=len(errors),
+        failed_count=len(errors),
+        item_errors=errors,
+    )
     db.add(job)
     db.commit()
+    if items:
+        from app.worker import process_batch
 
-    from app.worker import process_batch
-
-    process_batch.delay(str(job.id), items)
+        try:
+            process_batch.delay(str(job.id), items)
+        except Exception as exc:
+            for it in items:
+                storage.delete(it["path"])
+            job.status, job.error = "failed", "QUEUE_UNAVAILABLE"
+            db.commit()
+            raise AppError("QUEUE_UNAVAILABLE", "批次佇列暫時無法使用，請稍後再試", 503) from exc
     db.refresh(job)
     return JobAccepted(job_id=job.id, status=job.status, total=job.total)
 
@@ -147,7 +170,7 @@ def list_recognitions(
 @router.get(
     "/recognitions/{rec_id}",
     response_model=RecognitionOut,
-    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    responses=error_responses(404),
 )
 def get_recognition(rec_id: uuid.UUID, user: LimitedUser, db: DB) -> dict[str, Any]:
     return recognition_out(owned_recognition(db, rec_id, user))
@@ -156,11 +179,7 @@ def get_recognition(rec_id: uuid.UUID, user: LimitedUser, db: DB) -> dict[str, A
 @router.get(
     "/recognitions/{rec_id}/annotated",
     response_class=Response,
-    responses={
-        200: {"content": {"image/jpeg": {}}},
-        401: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
-    },
+    responses={200: {"content": {"image/jpeg": {}}}, **error_responses(404)},
 )
 def get_annotated(rec_id: uuid.UUID, user: LimitedUser, db: DB, storage: StorageDep) -> Response:
     rec = owned_recognition(db, rec_id, user)

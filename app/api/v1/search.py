@@ -4,10 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Query, UploadFile
 
-from app.api.deps import DB, AppSettings, RegistryDep
+from app.api.deps import DB, AppSettings, RegistryDep, error_responses
 from app.core.errors import AppError
 from app.core.ratelimit import LimitedUser
-from app.schemas import ErrorResponse, SearchOut, SimilarHit
+from app.schemas import SearchOut, SimilarHit
 from app.services import catalog
 from app.services.uploads import read_and_validate
 
@@ -17,7 +17,7 @@ router = APIRouter(tags=["search"])
 @router.post(
     "/search/similar",
     response_model=SearchOut,
-    responses={c: {"model": ErrorResponse} for c in (400, 401, 413, 415, 422, 503)},
+    responses=error_responses(400, 413, 415, 503),
 )
 async def search_similar(
     file: Annotated[UploadFile, File()],

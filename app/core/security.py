@@ -80,8 +80,16 @@ def get_current_user(
         raise unauthorized("token 無效") from exc
     if payload.get("type") != "access":
         raise unauthorized("token 類型錯誤")
+    # 簽章正確但 claim 格式不對（例如 sub 不是整數）也是無效 token，回 401 而不是 500
+    try:
+        user_id = int(payload["sub"])
+    except (TypeError, ValueError) as exc:
+        raise unauthorized("token 無效") from exc
+    # 超出 PostgreSQL integer 範圍的 id 直接拒絕，否則查詢會丟資料庫錯誤（500）
+    if not 1 <= user_id <= 2**31 - 1:
+        raise unauthorized("token 無效")
     # 角色以資料庫為準，不信任 token 裡的 role：使用者被降級後，舊 token 不能繼續當 admin 用
-    user = db.get(User, int(payload["sub"]))
+    user = db.get(User, user_id)
     if user is None:
         raise unauthorized("使用者不存在")
     return user

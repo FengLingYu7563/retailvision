@@ -4,15 +4,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import DB
+from app.api.deps import DB, error_responses
 from app.core.ratelimit import LimitedUser
-from app.schemas import ErrorResponse, StatsOut
+from app.schemas import StatsOut
 from app.services import stats
 
 router = APIRouter(tags=["stats"])
 
 
-@router.get("/stats/summary", response_model=StatsOut, responses={401: {"model": ErrorResponse}})
+@router.get("/stats/summary", response_model=StatsOut, responses=error_responses())
 def stats_summary(
     user: LimitedUser, db: DB, days: Annotated[int, Query(ge=1, le=365)] = 30
 ) -> dict[str, Any]:

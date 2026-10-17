@@ -5,11 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.api.deps import DB, AppSettings
+from app.api.deps import DB, AppSettings, error_responses
 from app.core.errors import unauthorized
 from app.core.ratelimit import rate_limit_by_ip
 from app.core.security import authenticate, create_access_token
-from app.schemas import ErrorResponse, TokenOut
+from app.schemas import TokenOut
 
 router = APIRouter(tags=["auth"])
 
@@ -17,7 +17,7 @@ router = APIRouter(tags=["auth"])
 @router.post(
     "/auth/token",
     response_model=TokenOut,
-    responses={401: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
+    responses=error_responses(401, 429, auth=False),
     dependencies=[Depends(rate_limit_by_ip)],
 )
 def issue_token(

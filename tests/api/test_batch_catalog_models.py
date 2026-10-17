@@ -6,12 +6,26 @@ Celery 在測試裡用 eager 模式（同一個 process 同步執行），用的
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import CatalogEmbedding
-from tests.api.conftest import GREEN, RED, YELLOW, assert_error, auth, jpeg, textured, upload
+from app.services.uploads import Storage
+from tests.api.conftest import (
+    GREEN,
+    RED,
+    STORAGE,
+    YELLOW,
+    assert_error,
+    auth,
+    jpeg,
+    textured,
+    upload,
+)
 
 
 def _files(blobs: list[tuple[str, bytes]]) -> list[tuple[str, tuple[str, bytes, str]]]:
@@ -72,12 +86,6 @@ def test_batch_limits_and_job_ownership(
         422,
         "VALIDATION_ERROR",
     )
-    big = _files([("big.jpg", b"\xff\xd8\xff" + b"\0" * (10 * 1024 * 1024))])
-    assert_error(
-        client.post("/api/v1/recognitions/batch", files=big, headers=auth(user_token)),
-        413,
-        "FILE_TOO_LARGE",
-    )
     r = client.post(
         "/api/v1/recognitions/batch",
         files=_files([("a.jpg", jpeg(textured(RED)))]),
@@ -87,6 +95,75 @@ def test_batch_limits_and_job_ownership(
     assert_error(
         client.get(f"/api/v1/jobs/{r.json()['job_id']}", headers=auth(user_token)), 404, "NOT_FOUND"
     )
+
+
+def _batch_files_on_disk() -> list[Path]:
+    root = STORAGE / "batch"
+    return [p for p in root.rglob("*") if p.is_file()] if root.exists() else []
+
+
+def test_invalid_batch_items_are_never_written_to_disk(
+    client: TestClient, user_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """不合格的檔案（壞圖、超過大小、不支援的格式）在上傳時就記成錯誤，不會寫進硬碟。"""
+    saved: list[str] = []
+    real_save = Storage.save
+
+    def spy(self: Storage, data: bytes, ext: str, kind: str) -> str:
+        path = real_save(self, data, ext, kind)
+        if kind == "batch":
+            saved.append(path)
+        return path
+
+    monkeypatch.setattr(Storage, "save", spy)
+    blobs = [
+        ("ok.jpg", jpeg(textured(RED))),
+        ("text.jpg", b"not an image"),
+        ("big.jpg", b"\xff\xd8\xff" + b"\0" * (10 * 1024 * 1024)),
+        ("pic.gif", jpeg(textured(RED))),
+    ]
+    r = client.post("/api/v1/recognitions/batch", files=_files(blobs), headers=auth(user_token))
+    assert r.status_code == 202
+    job = client.get(f"/api/v1/jobs/{r.json()['job_id']}", headers=auth(user_token)).json()
+    assert job["status"] == "done" and job["done_count"] == 4 and job["failed_count"] == 3
+    assert [(e["index"], e["code"]) for e in job["item_errors"]] == [
+        (1, "INVALID_IMAGE"),
+        (2, "FILE_TOO_LARGE"),
+        (3, "UNSUPPORTED_FORMAT"),
+    ]
+    assert len(saved) == 1  # 只有通過驗證的那張被寫進硬碟
+    assert _batch_files_on_disk() == []  # worker 處理完就刪掉暫存檔
+
+
+def test_batch_all_invalid_finishes_without_queue(client: TestClient, user_token: str) -> None:
+    r = client.post(
+        "/api/v1/recognitions/batch",
+        files=_files([("a.jpg", b"nope"), ("b.jpg", b"nope")]),
+        headers=auth(user_token),
+    )
+    assert r.status_code == 202 and r.json()["status"] == "done"
+
+
+def test_batch_queue_unavailable(
+    client: TestClient, user_token: str, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """佇列送不出去：回 503、job 標成 failed、已存的暫存檔刪掉，不留下永遠 pending 的 job。"""
+    from app import worker
+    from app.db.models import Job
+
+    def broken_delay(*_a: object, **_k: object) -> None:
+        raise ConnectionError("broker down")
+
+    monkeypatch.setattr(worker.process_batch, "delay", broken_delay)
+    r = client.post(
+        "/api/v1/recognitions/batch",
+        files=_files([("a.jpg", jpeg(textured(RED)))]),
+        headers=auth(user_token),
+    )
+    assert_error(r, 503, "QUEUE_UNAVAILABLE")
+    job = db.scalars(select(Job)).one()
+    assert job.status == "failed" and job.error == "QUEUE_UNAVAILABLE"
+    assert _batch_files_on_disk() == []
 
 
 # ---------- 2.9 新品登錄與以圖搜圖 ----------
@@ -189,6 +266,39 @@ def test_list_and_delete(
         404,
         "NOT_FOUND",
     )
+
+
+def test_catalog_create_failure_cleans_up_files(
+    client: TestClient,
+    user_token: str,
+    registry,
+    monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """登錄到一半失敗（第二張參考圖算 embedding 時出錯）：資料庫回滾，已存的參考圖也刪掉。"""
+    clf = registry.classifier
+    calls = {"n": 0}
+    real_embed = clf.embed
+
+    def flaky(img):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("embedding failed")
+        return real_embed(img)
+
+    def catalog_files() -> set[Path]:
+        root = STORAGE / "catalog"  # 整輪測試共用 storage，所以比對請求前後的差異
+        return {p for p in root.rglob("*") if p.is_file()} if root.exists() else set()
+
+    monkeypatch.setattr(clf, "embed", flaky)
+    before = catalog_files()
+    files = _files([(f"{i}.jpg", jpeg(textured(RED))) for i in range(3)])
+    r = client.post(
+        "/api/v1/catalog/products", data={"name": "X"}, files=files, headers=auth(user_token)
+    )
+    assert_error(r, 500, "INTERNAL_ERROR")
+    assert catalog_files() == before
+    page = client.get("/api/v1/catalog/products", headers=auth(user_token)).json()
+    assert page["total"] == 0
 
 
 # ---------- 3.6 切換模型 ----------

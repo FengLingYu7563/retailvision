@@ -55,7 +55,14 @@ def test_openapi_has_all_spec_endpoints(client: TestClient) -> None:
         ("post", "/api/v1/auth/token"),
         ("get", "/api/v1/healthz"),
     }:
-        assert spec["paths"][path][method].get("security"), (method, path)
+        op = spec["paths"][path][method]
+        assert op.get("security"), (method, path)
+        # 需要登入的端點都會回這些錯誤，文件也要列出來，而且格式是統一的 ErrorResponse
+        for code in ("401", "422", "429"):
+            ref = op["responses"][code]["content"]["application/json"]["schema"]["$ref"]
+            assert ref.endswith("/ErrorResponse"), (method, path, code)
+    health = spec["paths"]["/api/v1/healthz"]["get"]["responses"]["503"]
+    assert health["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
 
 
 def test_stats_summary(client: TestClient, user_token: str) -> None:
@@ -76,6 +83,18 @@ def test_stats_summary(client: TestClient, user_token: str) -> None:
     assert_error(client.get("/api/v1/stats/summary?days=0", headers=h), 422, "VALIDATION_ERROR")
 
 
+def test_stats_scoped_to_user(client: TestClient, user_token: str, admin_token: str) -> None:
+    """一般使用者的統計只算自己的紀錄，admin 算全部（IDOR）。"""
+    q = upload(jpeg(textured(RED)))
+    client.post("/api/v1/recognitions/product", files=q, headers=auth(user_token))
+    client.post("/api/v1/recognitions/product", files=q, headers=auth(admin_token))
+    client.post("/api/v1/recognitions/product", files=q, headers=auth(admin_token))
+    mine = client.get("/api/v1/stats/summary", headers=auth(user_token)).json()
+    everyone = client.get("/api/v1/stats/summary", headers=auth(admin_token)).json()
+    assert mine["product"]["count"] == 1
+    assert everyone["product"]["count"] == 3
+
+
 def test_healthz(client: TestClient) -> None:
     for path in ("/api/v1/healthz", "/healthz"):
         r = client.get(path)
@@ -92,8 +111,10 @@ def test_healthz_503_when_model_missing(client: TestClient) -> None:
         r = client.get("/api/v1/healthz")
     finally:
         registry.detector = saved
-    assert r.status_code == 503
-    assert r.json()["status"] == "degraded"
+    # 503 也是統一錯誤格式，元件狀態在 details
+    assert_error(r, 503, "SERVICE_UNAVAILABLE")
+    details = r.json()["error"]["details"]
+    assert details["status"] == "degraded" and details["models"]["detector"] is None
 
 
 def test_request_id_propagated_and_sanitized(client: TestClient) -> None:

@@ -19,13 +19,19 @@ class AppError(Exception):
     """業務錯誤。code 是給程式判斷用的固定字串，message 是給人看的說明。"""
 
     def __init__(
-        self, code: str, message: str, status: int = 400, headers: dict[str, str] | None = None
+        self,
+        code: str,
+        message: str,
+        status: int = 400,
+        headers: dict[str, str] | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
         self.headers = headers
+        self.details = details
 
 
 def unauthorized(message: str = "需要登入或 token 無效") -> AppError:
@@ -40,8 +46,11 @@ def not_found(message: str = "找不到資源") -> AppError:
     return AppError("NOT_FOUND", message, 404)
 
 
-def error_body(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message, "request_id": get_request_id()}}
+def error_body(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    err: dict[str, Any] = {"code": code, "message": message, "request_id": get_request_id()}
+    if details is not None:
+        err["details"] = details
+    return {"error": err}
 
 
 _STATUS_CODES = {
@@ -58,7 +67,9 @@ _STATUS_CODES = {
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
-        return JSONResponse(error_body(exc.code, exc.message), exc.status, headers=exc.headers)
+        return JSONResponse(
+            error_body(exc.code, exc.message, exc.details), exc.status, headers=exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:

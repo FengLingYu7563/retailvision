@@ -3,18 +3,18 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import select
 
-from app.api.deps import DB, RegistryDep, StorageDep
+from app.api.deps import DB, RegistryDep, StorageDep, error_responses
 from app.core.errors import AppError, not_found
 from app.core.ratelimit import LimitedUser
 from app.core.security import AdminUser
 from app.db.models import ModelVersion
-from app.schemas import ActivateModelIn, ActivateModelOut, ErrorResponse, ModelOut
+from app.schemas import ActivateModelIn, ActivateModelOut, ModelOut
 from app.services import catalog
 
 router = APIRouter(tags=["models"])
 
 
-@router.get("/models", response_model=list[ModelOut])
+@router.get("/models", response_model=list[ModelOut], responses=error_responses())
 def list_models(user: LimitedUser, db: DB) -> list[ModelVersion]:
     return list(db.scalars(select(ModelVersion).order_by(ModelVersion.task, ModelVersion.name)))
 
@@ -22,7 +22,7 @@ def list_models(user: LimitedUser, db: DB) -> list[ModelVersion]:
 @router.put(
     "/models/active",
     response_model=ActivateModelOut,
-    responses={c: {"model": ErrorResponse} for c in (401, 403, 404, 409, 422)},
+    responses=error_responses(403, 404, 409),
 )
 def activate_model(
     body: ActivateModelIn, user: AdminUser, db: DB, registry: RegistryDep, storage: StorageDep

@@ -65,8 +65,11 @@ def run_batch(db: Session, job_id: uuid.UUID, items: list[dict[str, Any]]) -> No
     job.status = "running"
     db.commit()
     recognize = RECOGNIZERS[job.type]
-    errors: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
+    # 上傳時就驗證失敗的項目已經記在 item_errors（也已計入 done_count），這裡接著累加
+    errors: list[dict[str, Any]] = list(job.item_errors or [])
+    done = job.done_count
+    for pos, item in enumerate(items):
+        index = item.get("index", pos)  # 在原本上傳順序裡的位置，錯誤訊息才對得上是哪一張
         try:
             img = validate_image_bytes(storage.read(item["path"]), item.get("filename"), settings)
             recognize(db, registry, storage, settings, img, job.user_id, False, job.id)
@@ -93,11 +96,12 @@ def run_batch(db: Session, job_id: uuid.UUID, items: list[dict[str, Any]]) -> No
             )
         finally:
             storage.delete(item["path"])
+        done += 1
         job = db.get(Job, job_id)
         assert job is not None
-        job.done_count = index + 1
+        job.done_count = done
         job.failed_count = len(errors)
-        job.item_errors = list(errors)
+        job.item_errors = sorted(errors, key=lambda e: e["index"])
         db.commit()
     job.status = "done"
     job.finished_at = datetime.now(UTC)
