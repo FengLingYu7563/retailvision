@@ -1,4 +1,27 @@
 {
+  "api_latency": {
+    "machine": {
+      "cpu": "AMD Ryzen 7 4800H with Radeon Graphics",
+      "logical_cpus": 16,
+      "os": "Windows 11",
+      "python": "3.12.10"
+    },
+    "method": "client 端端到端延遲，依序送出、不並行；API 與資料庫在同一台機器；ONNX Runtime CPU；壓測時 RATE_LIMIT_PER_MINUTE 調高",
+    "pass_product_p95_lt_300ms": true,
+    "pass_shelf_p95_lt_1500ms": true,
+    "product": {
+      "mean": 91.2,
+      "n": 100,
+      "p50": 88.9,
+      "p95": 104.7
+    },
+    "shelf": {
+      "mean": 352.2,
+      "n": 30,
+      "p50": 347.6,
+      "p95": 454.7
+    }
+  },
   "catalog_threshold": {
     "chosen": {
       "accuracy": 0.9155,

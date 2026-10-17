@@ -20,7 +20,7 @@
 | 2.11 | rate limit 生效，超過回 429 | L3 | pytest |
 | 2.12 | 單品辨識 CPU p95 < 300 ms、貨架分析 < 1.5 秒（README 記錄機器規格） | L3 | 壓測腳本 |
 
-## 建議的調整與補充（請審核）
+## 調整與補充（使用者已核准）
 
 1. **測試分兩層**（對應 2.2 與 Phase 3 的 CI 不需權重）：
    - API 測試用**假的 vision 模型**（依賴注入替換），CI 不需要 ONNX 權重也能跑完所有端點的成功與失敗案例。
@@ -43,7 +43,7 @@
 9. **2.12 壓測**：用自寫的 httpx 腳本對本機 uvicorn 打請求（CPU only），README 記錄 CPU 型號、執行緒數、樣本數。
    參考 Phase 1 單機量測：單品辨識（DINOv2）約 56 ms、貨架分析約 212 ms。
 
-## 需要使用者同意的安裝與下載
+## 安裝與下載（使用者已同意）
 
 | 項目 | 來源 | 大小（估計） |
 |---|---|---|
@@ -64,3 +64,30 @@
 8. 模型版本管理
 9. 檔案驗證、rate limit
 10. 測試補齊到覆蓋率門檻；機械檢查通過後送 Codex 審查
+
+## Phase 2 狀態（機械檢查與實測結果）
+
+| # | 結果 | 驗證 | 狀態 |
+|---|---|---|---|
+| 2.1 | 規格第 6 節 16 個端點都在 OpenAPI，需登入的都標示 Bearer；回應用 response_model 驗證 | `tests/api/test_misc.py`、各端點測試用 schema 驗證回應 | 通過 |
+| 2.2 | 全部測試 108 個（API 55 個用真 PostgreSQL / Redis + 假模型，另有真實模型整合 3 個）；`vision/` + `app/` 覆蓋率 96% | pytest-cov | 通過 |
+| 2.3 | 文字檔改 .jpg、PDF 改 .png、截斷 JPEG、不支援副檔名、超過 10 MB、壞檔後服務仍正常 | `tests/api/test_uploads.py` | 通過 |
+| 2.4 | 沒 token 401、過期 401、錯誤簽章 / alg=none 401、一般使用者打 admin 端點 403；角色以資料庫為準 | `tests/api/test_auth.py` | 通過 |
+| 2.5 | argon2id；JWT_SECRET 必填、至少 32 字元；git 追蹤的檔案沒有真實 secret | `test_auth.py`、`test_misc.py` | 通過 |
+| 2.6 | 存檔用伺服器產生的 UUID 檔名（含路徑穿越檔名的測試）；讀檔時再檢查路徑不出 storage | `test_uploads.py` | 通過 |
+| 2.7 | 全部 ORM 或參數化；AST 靜態檢查沒有字串組 SQL | `test_misc.py` | 通過 |
+| 2.8 | 20 張（含 1 張壞圖）回 202，job 到 done、19 筆紀錄、壞圖記在 item_errors。eager 測試與**真的 Celery worker**（Windows solo pool）都跑過 | `test_batch_catalog_models.py`、`tools/smoke_batch.py`（約 6.5 秒完成） | 通過 |
+| 2.9 | 真實模型：10 類各用 3 張 train 實拍登錄，test 照片查詢，top-1 10/10、top-5 10/10 | `tests/api/test_real_models.py` | 通過 |
+| 2.10 | 從空資料庫 upgrade 到最新、downgrade 回空、再 upgrade | `test_misc.py`、指令實測 | 通過 |
+| 2.11 | 超過限制回 429 + Retry-After；壓測時實際伺服器也觸發 | `test_auth.py` | 通過 |
+| 2.12 | 單品 p95 104.7 ms、貨架 p95 454.7 ms（AMD Ryzen 7 4800H、16 邏輯 CPU、ONNX Runtime CPU、client 端端到端） | `tools/bench_latency.py` | 通過 |
+| 調整 5 | catalog_match 門檻 0.675（Grocery val：正確率 91.5%） | `training/tune_catalog_threshold.py` | 完成 |
+| 調整 6 | decompression bomb：Pillow 內建防護與自訂 4000 萬像素上限都有測試 | `test_uploads.py` | 通過 |
+
+### 和規格的差異（實作時的決定）
+
+- `recognitions` 加 `job_id`；`jobs` 加 `type`、`failed_count`、`item_errors`；`catalog_embeddings` 加 `model_version`。
+- 一般使用者只看得到自己的辨識紀錄、批次任務與統計；別人的紀錄回 404（不是 403），避免用猜 ID 確認紀錄存在。
+- `DELETE /catalog/products/{id}` 限 admin（會影響所有使用者）。
+- `PUT /models/active` 目前只切換分類模型（偵測模型只有一個版本）。
+- `/healthz` 同時提供 `/api/v1/healthz` 與根路徑 `/healthz`（給 docker healthcheck）。

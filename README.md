@@ -6,7 +6,7 @@
 2. **貨架分析**：拍一排貨架，算出商品數量、缺貨空位、陳列密度。
 3. **新品登錄與以圖搜圖**：新商品不用重新訓練，上傳幾張參考圖就能辨識。
 
-> 目前進度：**Phase 1（影像處理與模型，離線）**。API、資料庫、部署為 Phase 2 / 3。
+> 目前進度：**Phase 1（模型）與 Phase 2（API 與資料庫）完成**。部署、CI、儀表板為 Phase 3。
 
 ## Phase 1 結果
 
@@ -100,6 +100,56 @@ CNN 特徵、多種形狀的候選都試過，沒有幫助。完整紀錄見 [do
 
 人工標註流程與避免高估召回率的設計見 `training/annotate_gaps.py`。
 
+## Phase 2：RESTful API
+
+FastAPI + PostgreSQL 16 + Redis + Celery。基底路徑 `/api/v1`，OpenAPI 文件在 `/docs`。
+除了 `/auth/token` 和 `/healthz`，所有端點都要 `Authorization: Bearer <token>`。
+
+| 方法 | 路徑 | 說明 |
+|---|---|---|
+| POST | `/auth/token` | 帳號密碼換 JWT（30 分鐘） |
+| POST | `/recognitions/product` | 單品辨識（細類、粗類、top-k、catalog 配對） |
+| POST | `/recognitions/shelf` | 貨架分析（商品框、空位、缺貨比例、陳列密度） |
+| POST | `/recognitions/batch` | 批次辨識，回 202 + job_id，由 Celery worker 處理 |
+| GET | `/jobs/{id}` | 批次進度、失敗的項目 |
+| GET | `/recognitions` | 歷史查詢：type、label、from、to、page、size |
+| GET | `/recognitions/{id}`、`/recognitions/{id}/annotated` | 單筆結果、標註圖 |
+| POST / GET / DELETE | `/catalog/products` | 新品登錄（1 到 5 張參考圖，不需重新訓練）、列表、刪除（admin） |
+| POST | `/search/similar` | 以圖搜圖，回傳前 k 名 |
+| GET / PUT | `/models`、`/models/active` | 模型版本與指標、切換使用中模型（admin，不需重啟） |
+| GET | `/stats/summary` | 類別數量、平均信心度、缺貨率、每日趨勢 |
+| GET | `/healthz` | 資料庫、Redis、模型狀態 |
+
+### 延遲（驗收 2.12，CPU）
+
+| 端點 | p50 | p95 | 門檻 |
+|---|---|---|---|
+| 單品辨識（DINOv2-small） | 88.9 ms | **104.7 ms** | 300 ms |
+| 貨架分析（YOLOv8n + 空位分類器） | 347.6 ms | **454.7 ms** | 1.5 秒 |
+
+機器：AMD Ryzen 7 4800H（16 個邏輯 CPU）、Windows 11、ONNX Runtime CPU。量的是 client 端看到的完整延遲（上傳、驗證、推論、存檔、寫資料庫），依序送出不並行（`tools/bench_latency.py`）。
+
+### 安全設計
+
+- 密碼 argon2id；JWT 只接受 HS256、必須有 exp；角色以資料庫為準，不信任 token 裡的 role。
+- 上傳驗證：10 MB 上限（讀取時就截斷）、副檔名白名單、magic bytes 判斷實際格式、**解碼前先讀檔頭檢查像素數**（防 decompression bomb）、實際解碼。
+- 檔名一律由伺服器產生（UUID），不使用使用者提供的檔名；讀檔時再確認路徑沒有跑出 storage 資料夾。
+- 一般使用者只看得到自己的紀錄，別人的紀錄回 404；所有 SQL 走 ORM 或參數化查詢。
+- 統一錯誤格式 `{"error": {"code", "message", "request_id"}}`，500 錯誤不回傳內部訊息；JSON 結構化日誌，每個請求都有 request_id。
+- Redis 計數的 rate limit（預設每分鐘 60 次）；登入端點依 IP 限制。
+- 空位分類器（pickle 格式）載入前比對 SHA-256，只從模型資料夾載入。
+
+### 本機啟動（Phase 3 會改成 docker compose 一鍵啟動）
+
+```bash
+cp .env.example .env            # 修改密碼與 JWT_SECRET
+docker compose up -d db redis
+alembic upgrade head
+python -m app.cli seed-models
+python -m app.cli create-user admin --role admin
+uvicorn app.main:create_app --factory --port 8000
+celery -A app.worker worker --pool=solo   # Windows 只能用 solo pool
+```
 ## 重現步驟
 
 ```bash
