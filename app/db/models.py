@@ -22,8 +22,9 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID, ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -111,6 +112,19 @@ class CatalogEmbedding(Base):
 
 class ModelVersion(Base):
     __tablename__ = "model_versions"
+    # 每個任務最多一個使用中的版本（Codex 第 9 輪 L1）。
+    # 用可延遲到 commit 才檢查的 exclusion constraint，而不是 partial unique index：
+    # 切換時同一個交易裡會先後更新新舊兩列，unique index 逐列檢查，
+    # 更新順序剛好先設新的 active 時會誤判衝突；延遲到 commit 時只剩一個 active，就不會誤判。
+    __table_args__ = (
+        ExcludeConstraint(
+            ("task", "="),
+            where=text("is_active"),
+            name="ex_model_versions_one_active_per_task",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)

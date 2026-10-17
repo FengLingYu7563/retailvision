@@ -173,6 +173,30 @@ def test_alembic_downgrade_and_upgrade() -> None:
     eng.dispose()
 
 
+def test_only_one_active_model_per_task(db) -> None:  # type: ignore[no-untyped-def]
+    """資料庫層級保證每個任務最多一個使用中的模型（Codex 第 9 輪 L1）。"""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    # 兩個分類模型同時 active：commit 時被拒絕
+    db.execute(text("UPDATE model_versions SET is_active = true WHERE task = 'classification'"))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+    # 同一個交易裡先設新的、再取消舊的（切換時的順序）：commit 時只有一個 active，允許
+    db.execute(text("UPDATE model_versions SET is_active = true WHERE name = 'cls-fake-b'"))
+    db.execute(text("UPDATE model_versions SET is_active = false WHERE name = 'cls-fake-a'"))
+    db.commit()
+    active = (
+        db.execute(
+            text("SELECT name FROM model_versions WHERE task = 'classification' AND is_active")
+        )
+        .scalars()
+        .all()
+    )
+    assert active == ["cls-fake-b"]
+
+
 # ---------- 靜態檢查 ----------
 
 
