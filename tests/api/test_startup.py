@@ -86,6 +86,62 @@ def test_db_active_model_missing_returns_model_not_ready(
         assert_error(r, 409, "MODEL_NOT_READY")
 
 
+def test_healthz_as_first_request_after_switch_to_broken_model(db) -> None:  # type: ignore[no-untyped-def]
+    """另一個 process 把使用中模型切到壞掉的版本後，這個 process 收到的第一個請求就是 /healthz：
+    必須回 503，classifier 為 null，不能回報舊模型的狀態。"""
+    from sqlalchemy import text
+
+    from app.main import create_app
+    from tests.api.conftest import FakeClassifier, FakeDetector
+
+    def loader(name: str) -> FakeClassifier:
+        if name == "cls-fake-b":
+            raise RuntimeError("corrupt onnx")
+        return FakeClassifier(name)
+
+    reg = ModelRegistry(loader, FakeDetector(), None)
+    reg.load_classifier("cls-fake-a")
+    with TestClient(create_app(registry=reg, settings=get_settings())) as c:
+        db.execute(
+            text(
+                "UPDATE model_versions SET is_active = (name = 'cls-fake-b') "
+                "WHERE task = 'classification'"
+            )
+        )
+        db.commit()
+        r = c.get("/healthz")  # 第一個請求
+    assert_error(r, 503, "SERVICE_UNAVAILABLE")
+    assert r.json()["error"]["details"]["models"]["classifier"] is None
+
+
+def test_no_active_classifier_in_db_disables_stale_model(user_token: str, db) -> None:  # type: ignore[no-untyped-def]
+    """資料庫沒有任何使用中的分類模型：不能繼續用記憶體裡的舊模型。"""
+    from sqlalchemy import text
+
+    from app.main import create_app
+    from tests.api.conftest import RED, auth, fake_registry, jpeg, textured
+
+    with TestClient(create_app(registry=fake_registry(), settings=get_settings())) as c:
+        db.execute(
+            text("UPDATE model_versions SET is_active = false WHERE task = 'classification'")
+        )
+        db.commit()
+        assert_error(c.get("/healthz"), 503, "SERVICE_UNAVAILABLE")
+        img = {"file": ("a.jpg", jpeg(textured(RED)), "image/jpeg")}
+        r = c.post("/api/v1/recognitions/product", files=img, headers=auth(user_token))
+        assert_error(r, 503, "MODEL_NOT_READY")
+        # 重新設定使用中模型後恢復
+        db.execute(
+            text(
+                "UPDATE model_versions SET is_active = (name = 'cls-fake-a') "
+                "WHERE task = 'classification'"
+            )
+        )
+        db.commit()
+        r = c.post("/api/v1/recognitions/product", files=img, headers=auth(user_token))
+        assert r.status_code == 201 and r.json()["model_version"] == "cls-fake-a"
+
+
 def test_missing_gap_classifier_falls_back_to_v1(tmp_path: Path) -> None:
     """分類與偵測模型都在、只缺空位分類器的 .joblib：服務正常，貨架分析用 v1 規則。"""
     s = get_settings()

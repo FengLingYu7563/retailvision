@@ -147,7 +147,15 @@ class ModelRegistry:
             .scalar()
         )
         current = self._classifier.version if self._classifier else None
-        if not active or active == current:
+        if not active:
+            # 資料庫沒有任何使用中的分類模型（還沒 seed、或全部被設成 inactive）：
+            # 以資料庫為準，不繼續用記憶體裡的舊模型（Codex 第 7 輪 L1）
+            if current is not None:
+                log.warning("資料庫沒有使用中的分類模型，停用 %s", current)
+                with self._lock:
+                    self._classifier = None
+            return
+        if active == current:
             return
         failed = self._failed
         if failed and failed[0] == active and time.monotonic() - failed[1] < RETRY_SECONDS:

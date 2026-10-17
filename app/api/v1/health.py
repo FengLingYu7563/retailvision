@@ -17,8 +17,12 @@ def healthz(request: Request, db: DB) -> HealthOut:
 
     503 也用統一錯誤格式（code SERVICE_UNAVAILABLE），各元件狀態放在 error.details。
     """
+    registry = request.app.state.registry
     try:
         db.execute(text("SELECT 1"))
+        # 先和資料庫的使用中模型對齊，再回報狀態：/healthz 可能是切換模型後這個 process 收到的
+        # 第一個請求，不同步的話會回報舊模型的狀態（Codex 第 7 輪 L1）
+        registry.sync(db)
         db_ok = True
     except Exception:
         db_ok = False
@@ -26,7 +30,6 @@ def healthz(request: Request, db: DB) -> HealthOut:
         redis_ok = bool(get_redis().ping())
     except Exception:
         redis_ok = False
-    registry = request.app.state.registry
     body = HealthOut(status="ok", database=db_ok, redis=redis_ok, models=registry.status())
     if not (db_ok and redis_ok and registry.ready):
         raise AppError(
