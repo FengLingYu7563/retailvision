@@ -78,6 +78,8 @@ class ShelfAnalysis:
     gaps: list[Gap] = field(default_factory=list)
     gap_ratio: float = 0.0
     density: float = 0.0
+    # 真正算作商品的框（扣掉被分類器判成空位的偵測框）；API 回應的 boxes 用這份
+    items: list[Box] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -332,7 +334,7 @@ def analyze_shelf(
         return ShelfAnalysis(item_count=0, row_count=0)
     rows = shelf_rows(boxes, row_tolerance, min_row_items)
     if not rows:
-        return ShelfAnalysis(item_count=len(boxes), row_count=0)
+        return ShelfAnalysis(item_count=len(boxes), row_count=0, items=list(boxes))
 
     stats = RegionStats(image) if image is not None else None
     if classifier is not None and stats is not None:
@@ -375,6 +377,7 @@ def analyze_shelf(
         gap_ratio=round(min(1.0, gap_width / row_width), 4) if row_width > 0 else 0.0,
         # 密度：各層商品實際佔用的面積比例（0 到 1）
         density=round(covered_area / row_area, 4) if row_area > 0 else 0.0,
+        items=[b for i, b in enumerate(boxes) if i not in gap_boxes],
     )
 
 

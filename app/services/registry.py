@@ -1,0 +1,142 @@
+"""模型註冊表：啟動時載入一次模型（FastAPI lifespan），請求之間共用。
+
+使用中的分類模型以資料庫 model_versions.is_active 為準：API 與 Celery worker 是不同的 process，
+各自載入模型；每次處理請求前呼叫 sync()，發現資料庫的使用中版本變了就重新載入，
+所以 PUT /models/active 切換後不用重啟服務（驗收 3.6）。
+
+vision 物件只依賴下面的 Protocol，測試時可以換成假的模型（CI 沒有 ONNX 權重）。
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
+
+import numpy as np
+from numpy.typing import NDArray
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.db.models import ModelVersion
+from vision.classifier import Classification
+from vision.detector import Box
+from vision.io import Image
+from vision.shelf import GapClassifier
+
+log = logging.getLogger("app.registry")
+
+
+class ClassifierLike(Protocol):
+    # 用唯讀 property 宣告：OnnxClassifier 的 version 是 property，假模型用一般屬性也相容
+    @property
+    def version(self) -> str: ...
+
+    def predict(self, img: Image, k: int = 5) -> Classification: ...
+
+    def embed(self, img: Image) -> NDArray[np.float32]: ...
+
+
+class DetectorLike(Protocol):
+    @property
+    def version(self) -> str: ...
+
+    def detect(self, img: Image) -> list[Box]: ...
+
+
+ClassifierLoader = Callable[[str], ClassifierLike]
+
+
+def onnx_classifier_loader(settings: Settings) -> ClassifierLoader:
+    def load(name: str) -> ClassifierLike:
+        from vision.classifier import OnnxClassifier
+
+        path = settings.models_dir / f"{name}.onnx"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return OnnxClassifier(path, threads=settings.onnx_threads)
+
+    return load
+
+
+class ModelRegistry:
+    def __init__(
+        self,
+        classifier_loader: ClassifierLoader,
+        detector: DetectorLike | None,
+        gap_classifier: GapClassifier | None,
+    ) -> None:
+        self._load_classifier = classifier_loader
+        self._classifier: ClassifierLike | None = None
+        self.detector = detector
+        self.gap_classifier = gap_classifier
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> ModelRegistry:
+        from vision.detector import OnnxDetector
+
+        det_path = settings.models_dir / f"{settings.detector_version}.onnx"
+        gap_path = settings.models_dir / settings.gap_classifier_file
+        detector = (
+            OnnxDetector(det_path, threads=settings.onnx_threads) if det_path.exists() else None
+        )
+        gap = (
+            GapClassifier.load(gap_path, allowed_dir=settings.models_dir)
+            if gap_path.exists()
+            else None
+        )
+        reg = cls(onnx_classifier_loader(settings), detector, gap)
+        try:
+            reg.load_classifier(settings.classifier_version)
+        except FileNotFoundError:
+            log.warning("找不到分類模型 %s，/healthz 會回報 503", settings.classifier_version)
+        return reg
+
+    @property
+    def classifier(self) -> ClassifierLike | None:
+        return self._classifier
+
+    def load_classifier(self, name: str) -> ClassifierLike:
+        clf = self._load_classifier(name)
+        with self._lock:
+            self._classifier = clf
+        log.info("分類模型 %s 已載入", name)
+        return clf
+
+    def build_classifier(self, name: str) -> ClassifierLike:
+        """只建立、不切換：切換前要先用新模型重新計算 catalog embedding。"""
+        return self._load_classifier(name)
+
+    def set_classifier(self, clf: ClassifierLike) -> None:
+        with self._lock:
+            self._classifier = clf
+
+    def sync(self, db: Session) -> None:
+        """資料庫的使用中分類模型和記憶體中的不同時，重新載入（其他 process 切換過模型）。"""
+        active = (
+            db.query(ModelVersion.name)
+            .filter(ModelVersion.task == "classification", ModelVersion.is_active.is_(True))
+            .scalar()
+        )
+        current = self._classifier.version if self._classifier else None
+        if active and active != current:
+            log.info("偵測到使用中模型改為 %s，重新載入", active)
+            self.load_classifier(active)
+
+    def status(self) -> dict[str, str | None]:
+        return {
+            "classifier": self._classifier.version if self._classifier else None,
+            "detector": self.detector.version if self.detector else None,
+            "gap_classifier": self.gap_classifier.kind if self.gap_classifier else None,
+        }
+
+    @property
+    def ready(self) -> bool:
+        return self._classifier is not None and self.detector is not None
+
+
+def model_file(settings: Settings, name: str) -> Path:
+    return settings.models_dir / f"{name}.onnx"

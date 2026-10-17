@@ -50,24 +50,16 @@
 
 ## Last Progress
 
-Phase 1 進行中（最新 commit 見 `git log`），使用者不接受有未達標項目就進 Phase 2。
+**Phase 1 完成**（Codex 第 7 輪 PASS），尚未開始 Phase 2。各項結果以 `docs/ACCEPTANCE_PHASE1.md` 的狀態表為準。
 
-- 1.1 到 1.7、1.9 通過。上線分類 / embedding 模型為 `cls-dinov2-v2`（DINOv2-small + SupCon）：細類 95.1%、標準圖檢索 95.3%、CPU p95 約 56 ms。偵測 `det-yolov8n-v1` mAP50 0.900（ONNX）。
-- 1.8 缺貨空位未達標：v1 規則在評估集召回 25.5%。v2 分類器（`vision/shelf.py` 的 GapClassifier）在調參集 10 張上試了 5 次，召回 70% 時精確率最高約 24%，觸發停止條件。
-- 使用者選擇方案 1：再標 30 張調參集（SKU-110K val），已完成，共 40 張、236 個空位。
-  三次嘗試後再次觸發停止條件：最好的是 GBT（深度 4、300 輪），CV 召回 70.3% 時精確率 37%。
-  CNN 特徵、多種形狀的候選都沒有幫助（後者已還原）。紀錄在 `docs/experiments/gaps_1_8.md` 第三輪。
-- 使用者決定用最佳設定（GBT、召回優先門檻 0.35）跑評估集一次：召回 56.4%、精確 38.7%（v1 26.6%），
-  1.8（L3）記錄為未達標。上線貨架分析用 v2 分類器（`models/gap_classifier.joblib` + `.json`），CPU p95 212 ms。
-- Codex 第 5 到 7 輪：修正 joblib 載入安全（先驗 SHA-256、限定資料夾）、1.7 保留類別實驗的洩漏（重訓後沒看過的類別 47.0% / top-5 92.7%）、
-  annotate_gaps 的 --set 位置。第 7 輪 PASS，Phase 1 完成。
-- 方法規定：15 張評估集已用來報告最終結果，之後任何方法變更都要另標全新的評估集。
+- 上線模型：分類 / embedding `cls-dinov2-v2`、偵測 `det-yolov8n-v1`、空位分類器 `models/gap_classifier.*`（GBT）。
+- 1.8（L3）未達標並已記錄：評估集召回 56.4%、精確 38.7%。15 張評估集已用掉，改方法要另標新的評估集。
 
 ## Todos
 
-1. 跟使用者確認後進 Phase 2（API 與資料庫）。Phase 1 的 Codex 審查已 PASS（第 7 輪）。
-3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
-4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
+1. 跟使用者確認後開始 Phase 2（API 與資料庫）：先寫 Phase 2 驗收標準給使用者審核，才動手。
+2. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+3. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
 
 ## Important Decisions
 
