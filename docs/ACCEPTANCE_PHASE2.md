@@ -119,3 +119,9 @@
 | 每個檔案的 10 MB 上限在串流解析時就生效（`app/services/multipart.py`）：超過的資料不進記憶體、不寫暫存檔；批次裡記成該項目的 FILE_TOO_LARGE，單張與 catalog 回 413 | L2 | `tests/api/test_body_limit.py`（含「完全沒有用到暫存檔」的檢查） |
 | `app/` 不 import torch / torchvision / ultralytics / timm / `training`；`pyproject` 主要依賴不含 torch 系列 | L1 | `tests/unit/test_repo_hygiene.py` |
 | `.env`、資料集、checkpoint、`.onnx`、`.joblib` 不被 git 追蹤 | L2 | `tests/unit/test_repo_hygiene.py`、`tests/api/test_misc.py` |
+
+## Codex 審查補充的檢查項目（第 5 輪）
+
+| 項目 | 等級 | 驗證方式 |
+|---|---|---|
+| 乾淨 checkout 啟動：權重檔（.onnx、.joblib）不存在或損壞都不會讓 API 啟動失敗；分類 / 偵測模型缺少時 `/healthz` 回 503，空位分類器缺少時貨架分析退回 v1 規則 | L1 | `tests/api/test_startup.py` |

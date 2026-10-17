@@ -76,23 +76,40 @@ class ModelRegistry:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelRegistry:
+        """任何模型檔不存在或損壞都不會讓服務啟動失敗（Codex 第 5 輪 L1）。
+
+        權重檔不進 git（.onnx、.joblib 都在 .gitignore），乾淨的 checkout 或部署漏放檔案很常見：
+        - 分類 / 偵測模型讀不到：設為 None，/healthz 回 503，相關端點回 MODEL_NOT_READY。
+        - 空位分類器是選配的（.json 有 commit、.joblib 沒有）：讀不到就設為 None，
+          貨架分析退回 v1 的紋理規則，只記 warning。
+        """
         from vision.detector import OnnxDetector
 
         det_path = settings.models_dir / f"{settings.detector_version}.onnx"
         gap_path = settings.models_dir / settings.gap_classifier_file
-        detector = (
-            OnnxDetector(det_path, threads=settings.onnx_threads) if det_path.exists() else None
-        )
-        gap = (
-            GapClassifier.load(gap_path, allowed_dir=settings.models_dir)
-            if gap_path.exists()
-            else None
-        )
+        detector: DetectorLike | None = None
+        if det_path.exists():
+            try:
+                detector = OnnxDetector(det_path, threads=settings.onnx_threads)
+            except Exception:
+                log.warning("偵測模型 %s 無法載入，/healthz 會回報 503", det_path, exc_info=True)
+        else:
+            log.warning("找不到偵測模型 %s，/healthz 會回報 503", det_path)
+        gap: GapClassifier | None = None
+        if gap_path.exists():
+            try:
+                gap = GapClassifier.load(gap_path, allowed_dir=settings.models_dir)
+            except (FileNotFoundError, ValueError, OSError):
+                log.warning("空位分類器無法載入，貨架分析改用紋理規則（v1）", exc_info=True)
         reg = cls(onnx_classifier_loader(settings), detector, gap)
         try:
             reg.load_classifier(settings.classifier_version)
-        except FileNotFoundError:
-            log.warning("找不到分類模型 %s，/healthz 會回報 503", settings.classifier_version)
+        except Exception:
+            log.warning(
+                "分類模型 %s 無法載入，/healthz 會回報 503",
+                settings.classifier_version,
+                exc_info=True,
+            )
         return reg
 
     @property
