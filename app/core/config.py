@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # 解碼後像素上限：防止 decompression bomb（很小的檔案解碼後吃光記憶體）
     max_image_pixels: int = 40_000_000
     max_batch_files: int = 50
+    # 批次請求的總大小上限（在 multipart 解析前就檢查，見 app/core/bodylimit.py）
+    max_batch_bytes: int = 100 * 1024 * 1024
     # catalog_match 的相似度門檻：training/tune_catalog_threshold.py 只用 Grocery val 選定，
     # cls-dinov2-v2 在 0.675 時「該配對的配對正確、沒登錄的回 null」正確率最高（91.5%）。
     # 門檻依模型而異，換模型時要重跑那支腳本。

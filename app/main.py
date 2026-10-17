@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from app.api.v1 import health
 from app.api.v1 import router as v1_router
+from app.core.bodylimit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
 from app.core.logging import request_id_middleware, setup_logging
@@ -38,6 +39,9 @@ def create_app(registry: ModelRegistry | None = None, settings: Settings | None 
         description="零售商品影像辨識：單品辨識、貨架分析、新品登錄與以圖搜圖。",
         lifespan=lifespan,
     )
+    # 順序：後加入的在外層。大小限制在 request_id 內層，413 回應才帶得到 request_id；
+    # 但仍在 multipart 解析（endpoint 的參數解析）之前
+    app.add_middleware(BodySizeLimitMiddleware, settings=settings)
     app.middleware("http")(request_id_middleware)
     install_error_handlers(app)
     app.include_router(v1_router)

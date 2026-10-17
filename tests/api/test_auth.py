@@ -117,6 +117,30 @@ def test_rate_limit_429(client: TestClient, user_token: str) -> None:
     assert r.status_code == 200  # 恢復預設額度後正常
 
 
+def test_login_brute_force_rate_limited_by_ip(client: TestClient, user_token: str) -> None:
+    """/auth/token 依 client IP 計數：同一個來源連續猜密碼，超過額度就回 429（暴力破解防護）。"""
+    settings = get_settings().model_copy(update={"rate_limit_per_minute": 5})
+    client.app.dependency_overrides[get_settings] = lambda: settings  # type: ignore[attr-defined]
+    try:
+        codes = []
+        for i in range(8):
+            r = client.post(
+                "/api/v1/auth/token", data={"username": "alice", "password": f"guess-{i}"}
+            )
+            codes.append(r.status_code)
+        # 被限流後，就算密碼正確也拿不到 token
+        blocked = client.post(
+            "/api/v1/auth/token", data={"username": "alice", "password": "correct-horse-battery"}
+        )
+    finally:
+        client.app.dependency_overrides.clear()  # type: ignore[attr-defined]
+    # 測試開始時 user_token fixture 已經登入過一次，所以額度剩 4 次
+    assert codes[:4] == [401] * 4
+    assert codes[4:] == [429] * 4
+    assert_error(blocked, 429, "RATE_LIMITED")
+    assert blocked.headers["Retry-After"] == "60"
+
+
 def test_rate_limit_error_format(client: TestClient, user_token: str) -> None:
     settings = get_settings().model_copy(update={"rate_limit_per_minute": 0})
     client.app.dependency_overrides[get_settings] = lambda: settings  # type: ignore[attr-defined]

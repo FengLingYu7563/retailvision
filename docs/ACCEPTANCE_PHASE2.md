@@ -102,3 +102,12 @@
 | 批次：不合格的檔案上傳時就記成錯誤、不寫進硬碟；佇列不可用時回 503、job 標成 failed、刪除暫存檔 | L2 | `test_batch_catalog_models.py` |
 | OpenAPI 列出每個需登入端點的 401 / 422 / 429，錯誤格式為 ErrorResponse | L1 | `test_misc.py` |
 | catalog 登錄中途失敗時資料庫回滾並刪除已存的參考圖；刪除商品先刪資料庫、檔案刪除失敗只記 log | L1 | `test_batch_catalog_models.py` |
+
+## Codex 審查補充的檢查項目（第 2 輪）
+
+| 項目 | 等級 | 驗證方式 |
+|---|---|---|
+| 請求大小在 multipart 解析之前就限制（ASGI middleware）：Content-Length 超過直接拒絕、chunked 串流累計超過就中斷；單張、批次總量（`MAX_BATCH_BYTES`，預設 100 MB）、JSON 端點（1 MB）各有上限 | L2 | `tests/api/test_body_limit.py` |
+| `/auth/token` 依 client IP 限流：連續猜密碼超過額度回 429，被限流後正確密碼也拿不到 token | L2 | `tests/api/test_auth.py` |
+
+部署注意：反向代理（例如 nginx 的 `client_max_body_size`）也要設定相同上限，做為第二道防線（Phase 3）。
