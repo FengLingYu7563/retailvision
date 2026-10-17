@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -22,6 +23,8 @@ from app.db.session import get_db
 _hasher = PasswordHasher()
 # 帳號不存在時也做一次雜湊比對，回應時間才不會洩漏「這個帳號存在」
 _DUMMY_HASH = _hasher.hash("dummy-password-for-timing")
+# JWT sub：只接受 ASCII 數字、不可有前導 0（str.isdecimal 也會接受全形與其他文字的數字）
+_USER_ID = re.compile(r"[1-9][0-9]{0,9}")
 
 
 def hash_password(password: str) -> str:
@@ -80,13 +83,15 @@ def get_current_user(
         raise unauthorized("token 無效") from exc
     if payload.get("type") != "access":
         raise unauthorized("token 類型錯誤")
-    # 簽章正確但 claim 格式不對（例如 sub 不是整數）也是無效 token，回 401 而不是 500
-    try:
-        user_id = int(payload["sub"])
-    except (TypeError, ValueError) as exc:
-        raise unauthorized("token 無效") from exc
+    # 簽章正確但 claim 格式不對也是無效 token，回 401 而不是 500。
+    # 先檢查型別與格式再轉換：int() 會把 JSON 的 1.5、true 都轉成 1，
+    # 舊版 PyJWT 不強制 sub 是字串，這類 token 就會被當成使用者 1。
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not _USER_ID.fullmatch(sub):
+        raise unauthorized("token 無效")
+    user_id = int(sub)
     # 超出 PostgreSQL integer 範圍的 id 直接拒絕，否則查詢會丟資料庫錯誤（500）
-    if not 1 <= user_id <= 2**31 - 1:
+    if user_id > 2**31 - 1:
         raise unauthorized("token 無效")
     # 角色以資料庫為準，不信任 token 裡的 role：使用者被降級後，舊 token 不能繼續當 admin 用
     user = db.get(User, user_id)

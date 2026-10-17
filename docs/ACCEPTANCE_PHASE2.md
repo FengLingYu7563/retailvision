@@ -97,7 +97,7 @@
 | 項目 | 等級 | 驗證方式 |
 |---|---|---|
 | 所有 4xx / 5xx 都是統一錯誤格式並帶 request_id，包括 `/healthz` 的 503（code `SERVICE_UNAVAILABLE`，元件狀態在 `error.details`）、422、429、500 | L1 | `test_misc.py` |
-| 簽章正確但 claim 格式不對的 JWT（sub 非整數、超出範圍、缺 type / sub / exp、type 錯誤、使用者不存在）一律 401 | L1 | `test_auth.py` |
+| 簽章正確但 claim 格式不對的 JWT（sub 非整數、超出範圍、前導 0、全形 / 非 ASCII 數字、JSON 數字 / 布林 / 物件、缺 type / sub / exp、type 錯誤、使用者不存在）一律 401 | L1 | `test_auth.py` |
 | IDOR：一般使用者只看得到自己的辨識紀錄、標註圖、批次、統計 | L2 | `test_recognitions.py`、`test_batch_catalog_models.py`、`test_misc.py` |
 | 批次：不合格的檔案上傳時就記成錯誤、不寫進硬碟；佇列不可用時回 503、job 標成 failed、刪除暫存檔 | L2 | `test_batch_catalog_models.py` |
 | OpenAPI 列出每個需登入端點的 401 / 422 / 429，錯誤格式為 ErrorResponse | L1 | `test_misc.py` |

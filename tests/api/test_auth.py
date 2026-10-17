@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -74,10 +75,33 @@ def test_signed_token_with_malformed_claims_401(client: TestClient, user_token: 
         {"exp": exp, "type": "access"},  # 沒有 sub
         {"sub": "1", "type": "access"},  # 沒有 exp
         {"sub": "999999", "exp": exp, "type": "access"},  # 使用者不存在
+        {"sub": "01", "exp": exp, "type": "access"},  # 前導 0
+        {"sub": " 1", "exp": exp, "type": "access"},  # 空白
+        {"sub": "+1", "exp": exp, "type": "access"},
+        {"sub": "１", "exp": exp, "type": "access"},  # 全形數字（int() 會接受）
+        {"sub": "١", "exp": exp, "type": "access"},  # 阿拉伯數字（int() 會接受）
     ]
     for payload in bad_payloads:
         tok = jwt.encode(payload, secret, algorithm="HS256")
         r = client.get("/api/v1/models", headers=auth(tok))
+        assert_error(r, 401, "UNAUTHORIZED")
+
+
+def test_non_string_sub_rejected_even_if_library_allows(
+    client: TestClient, user_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON 數字 / 布林 / 物件當 sub：int() 會把 1.5、true 轉成 1，必須在轉換前就擋下。
+
+    新版 PyJWT 自己會拒絕非字串的 sub；這裡讓 jwt.decode 直接回傳這些 payload，
+    模擬不強制檢查的舊版，確認我們自己的檢查也擋得住（使用者 1 是 alice，存在）。
+    """
+    import app.core.security as security
+
+    exp = int((datetime.now(UTC) + timedelta(minutes=5)).timestamp())
+    for sub in (1, 1.5, True, [1], {"id": 1}, None):
+        payload = {"sub": sub, "exp": exp, "type": "access"}
+        monkeypatch.setattr(security.jwt, "decode", lambda *_a, p=payload, **_k: p)
+        r = client.get("/api/v1/models", headers=auth("any.signed.token"))
         assert_error(r, 401, "UNAUTHORIZED")
 
 
