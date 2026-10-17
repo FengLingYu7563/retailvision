@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +28,7 @@ from vision.io import Image
 from vision.shelf import GapClassifier
 
 log = logging.getLogger("app.registry")
+RETRY_SECONDS = 30
 
 
 class ClassifierLike(Protocol):
@@ -73,6 +75,7 @@ class ModelRegistry:
         self.detector = detector
         self.gap_classifier = gap_classifier
         self._lock = threading.Lock()
+        self._failed: tuple[str, float] | None = None  # （載入失敗的版本, 時間）
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelRegistry:
@@ -132,16 +135,34 @@ class ModelRegistry:
             self._classifier = clf
 
     def sync(self, db: Session) -> None:
-        """資料庫的使用中分類模型和記憶體中的不同時，重新載入（其他 process 切換過模型）。"""
+        """資料庫的使用中分類模型和記憶體中的不同時，重新載入（其他 process 切換過模型）。
+
+        載入失敗（檔案不存在或損壞）不會讓請求變成 500（Codex 第 6 輪 L1）：分類模型設為不可用，
+        需要它的端點回 MODEL_NOT_READY，貨架分析（只用偵測模型）不受影響。
+        同一個壞掉的版本 RETRY_SECONDS 內不重試，避免每個請求都去解析一次壞檔。
+        """
         active = (
             db.query(ModelVersion.name)
             .filter(ModelVersion.task == "classification", ModelVersion.is_active.is_(True))
             .scalar()
         )
         current = self._classifier.version if self._classifier else None
-        if active and active != current:
-            log.info("偵測到使用中模型改為 %s，重新載入", active)
+        if not active or active == current:
+            return
+        failed = self._failed
+        if failed and failed[0] == active and time.monotonic() - failed[1] < RETRY_SECONDS:
+            return
+        log.info("偵測到使用中模型改為 %s，重新載入", active)
+        try:
             self.load_classifier(active)
+            self._failed = None
+        except Exception:
+            log.error(
+                "使用中模型 %s 無法載入，分類相關端點回 MODEL_NOT_READY", active, exc_info=True
+            )
+            with self._lock:
+                self._classifier = None
+            self._failed = (active, time.monotonic())
 
     def status(self) -> dict[str, str | None]:
         return {

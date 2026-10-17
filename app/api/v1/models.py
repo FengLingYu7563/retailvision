@@ -44,9 +44,9 @@ def activate_model(
         raise not_found(f"找不到模型 {body.name}")
     try:
         clf = registry.build_classifier(target.name)
-    except FileNotFoundError as exc:
+    except Exception as exc:  # 檔案不存在或損壞：都不切換，舊模型繼續使用
         db.rollback()
-        raise AppError("MODEL_NOT_READY", f"模型檔不存在：{target.name}", 409) from exc
+        raise AppError("MODEL_NOT_READY", f"模型檔不存在或無法載入：{target.name}", 409) from exc
     added = catalog.reembed(db, clf, storage)
     for m in rows:
         m.is_active = m.name == target.name

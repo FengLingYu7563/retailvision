@@ -49,6 +49,43 @@ def test_api_starts_and_reports_degraded_without_models(tmp_path: Path) -> None:
         assert r.json()["error"]["details"]["models"]["classifier"] is None
 
 
+def test_db_active_model_missing_returns_model_not_ready(
+    user_token: str, admin_token: str, db
+) -> None:  # type: ignore[no-untyped-def]
+    """資料庫的使用中分類模型指向不存在或損壞的檔案（例如另一台機器切換了模型、這台沒放檔案）：
+    需要分類模型的端點回 503 MODEL_NOT_READY，不是 500；貨架分析與健康檢查仍正常回應。"""
+    from sqlalchemy import text
+
+    from app.main import create_app
+    from tests.api.conftest import RED, FakeClassifier, FakeDetector, auth, jpeg, textured
+
+    def loader(name: str) -> FakeClassifier:
+        if name == "cls-fake-b":
+            raise RuntimeError("corrupt onnx")
+        return FakeClassifier(name)
+
+    reg = ModelRegistry(loader, FakeDetector(), None)
+    reg.load_classifier("cls-fake-a")
+    with TestClient(create_app(registry=reg, settings=get_settings())) as c:
+        db.execute(
+            text(
+                "UPDATE model_versions SET is_active = (name = 'cls-fake-b') "
+                "WHERE task = 'classification'"
+            )
+        )
+        db.commit()
+        img = {"file": ("a.jpg", jpeg(textured(RED)), "image/jpeg")}
+        for path in ("/api/v1/recognitions/product", "/api/v1/search/similar"):
+            assert_error(c.post(path, files=img, headers=auth(user_token)), 503, "MODEL_NOT_READY")
+        # 貨架分析只需要偵測模型，照常運作
+        r = c.post("/api/v1/recognitions/shelf", files=img, headers=auth(user_token))
+        assert r.status_code == 201
+        assert_error(c.get("/healthz"), 503, "SERVICE_UNAVAILABLE")
+        # 切換到損壞的模型：409，不切換
+        r = c.put("/api/v1/models/active", json={"name": "cls-fake-b"}, headers=auth(admin_token))
+        assert_error(r, 409, "MODEL_NOT_READY")
+
+
 def test_missing_gap_classifier_falls_back_to_v1(tmp_path: Path) -> None:
     """分類與偵測模型都在、只缺空位分類器的 .joblib：服務正常，貨架分析用 v1 規則。"""
     s = get_settings()

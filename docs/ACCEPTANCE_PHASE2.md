@@ -125,3 +125,4 @@
 | 項目 | 等級 | 驗證方式 |
 |---|---|---|
 | 乾淨 checkout 啟動：權重檔（.onnx、.joblib）不存在或損壞都不會讓 API 啟動失敗；分類 / 偵測模型缺少時 `/healthz` 回 503，空位分類器缺少時貨架分析退回 v1 規則 | L1 | `tests/api/test_startup.py` |
+| （第 6 輪）資料庫的使用中分類模型檔不存在或損壞時，每個請求的模型同步不會變成 500：分類相關端點回 503 MODEL_NOT_READY、貨架分析照常、`/healthz` 回 503；切換到損壞的模型回 409，不切換 | L1 | `tests/api/test_startup.py` |
