@@ -121,6 +121,7 @@ class ModelVersion(Base):
             ("task", "="),
             where=text("is_active"),
             name="ex_model_versions_one_active_per_task",
+            using="btree",  # 和 migration 一致，之後比對 schema 才不會有落差
             deferrable=True,
             initially="DEFERRED",
         ),

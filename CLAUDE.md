@@ -50,8 +50,8 @@
 
 ## Last Progress
 
-**Phase 1 完成**；**Phase 2 實作完成，機械檢查與實測 2.1 到 2.12 全部通過，等 Codex 審查**。
-狀態表在 `docs/ACCEPTANCE_PHASE1.md`、`docs/ACCEPTANCE_PHASE2.md`。
+**Phase 1、Phase 2 完成**（Phase 2 的 Codex 審查第 10 輪 PASS），尚未開始 Phase 3。
+狀態表在 `docs/ACCEPTANCE_PHASE1.md`、`docs/ACCEPTANCE_PHASE2.md`（含 Codex 各輪補充的檢查項目）。
 
 - 上線模型：分類 / embedding `cls-dinov2-v2`、偵測 `det-yolov8n-v1`、空位分類器 `models/gap_classifier.*`（GBT）。
 - API：`uvicorn app.main:create_app --factory`；PostgreSQL / Redis 用 `docker compose up -d db redis`；
@@ -60,10 +60,10 @@
 
 ## Todos
 
-1. Phase 2 送 Codex 審查（request 檔要含原始需求、`docs/ACCEPTANCE_PHASE2.md`、審查範圍 `app/`、`migrations/`、`tests/api/`、`tools/`）。
-2. Phase 2 PASS 後，跟使用者確認再開始 Phase 3（Docker、CI、模擬相機、Streamlit、README），先寫驗收標準給使用者審核。
-3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
-4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
+1. 跟使用者確認再開始 Phase 3（Docker、CI、模擬相機、Streamlit、README），先寫驗收標準給使用者審核。
+   Phase 3 要記得：反向代理也設 client_max_body_size（上傳上限的第二道防線）；Celery worker 在 Linux 容器裡跑（不用 solo pool）。
+2. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+3. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
 
 ## Important Decisions
 
