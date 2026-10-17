@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
 from sqlalchemy import func, select
 
@@ -14,8 +14,10 @@ from app.api.deps import (
     RegistryDep,
     StorageDep,
     error_responses,
+    multipart_doc,
     owned_recognition,
     recognition_out,
+    single_image,
 )
 from app.core.errors import AppError
 from app.core.ratelimit import LimitedUser
@@ -28,8 +30,9 @@ from app.schemas import (
     RecognitionSummary,
     ShelfRecognition,
 )
-from app.services.recognition import recognize_product, recognize_shelf
-from app.services.uploads import read_and_validate, read_limited, validate_image_bytes
+from app.services.multipart import read_multipart
+from app.services.recognition import RECOGNIZERS, recognize_product, recognize_shelf
+from app.services.uploads import validate_part
 
 router = APIRouter(tags=["recognitions"])
 
@@ -38,10 +41,16 @@ Strict = Annotated[bool, Query(description="品質不佳時直接回 422 LOW_QUA
 
 
 @router.post(
-    "/recognitions/product", status_code=201, response_model=ProductRecognition, responses=_ERRORS
+    "/recognitions/product",
+    status_code=201,
+    response_model=ProductRecognition,
+    responses=_ERRORS,
+    openapi_extra=multipart_doc(
+        "file", multiple=False, description="商品照片（jpg / png / webp，10 MB 以內）"
+    ),
 )
 async def create_product_recognition(
-    file: Annotated[UploadFile, File(description="商品照片（jpg / png / webp，10 MB 以內）")],
+    request: Request,
     user: LimitedUser,
     db: DB,
     registry: RegistryDep,
@@ -49,16 +58,23 @@ async def create_product_recognition(
     settings: AppSettings,
     strict: Strict = False,
 ) -> dict[str, Any]:
-    img = await read_and_validate(file, settings)
+    # 先驗證登入與限流（dependency），通過後才開始讀上傳內容
+    img = await single_image(request, settings)
     rec = recognize_product(db, registry, storage, settings, img, user.id, strict)
     return recognition_out(rec)
 
 
 @router.post(
-    "/recognitions/shelf", status_code=201, response_model=ShelfRecognition, responses=_ERRORS
+    "/recognitions/shelf",
+    status_code=201,
+    response_model=ShelfRecognition,
+    responses=_ERRORS,
+    openapi_extra=multipart_doc(
+        "file", multiple=False, description="貨架照片（jpg / png / webp，10 MB 以內）"
+    ),
 )
 async def create_shelf_recognition(
-    file: Annotated[UploadFile, File(description="貨架照片（jpg / png / webp，10 MB 以內）")],
+    request: Request,
     user: LimitedUser,
     db: DB,
     registry: RegistryDep,
@@ -66,35 +82,49 @@ async def create_shelf_recognition(
     settings: AppSettings,
     strict: Strict = False,
 ) -> dict[str, Any]:
-    img = await read_and_validate(file, settings)
+    img = await single_image(request, settings)
     rec = recognize_shelf(db, registry, storage, settings, img, user.id, strict)
     return recognition_out(rec)
 
 
-@router.post("/recognitions/batch", status_code=202, response_model=JobAccepted, responses=_ERRORS)
+@router.post(
+    "/recognitions/batch",
+    status_code=202,
+    response_model=JobAccepted,
+    responses=_ERRORS,
+    openapi_extra=multipart_doc(
+        "files",
+        multiple=True,
+        description="多張圖片，每張 10 MB 以內",
+        fields={"type": {"type": "string", "enum": ["product", "shelf"], "default": "product"}},
+    ),
+)
 async def create_batch(
-    files: Annotated[list[UploadFile], File(description="多張圖片")],
+    request: Request,
     user: LimitedUser,
     db: DB,
     storage: StorageDep,
     settings: AppSettings,
-    type: Annotated[Literal["product", "shelf"], Form()] = "product",
 ) -> JobAccepted:
     """批次辨識：先驗證、存檔、建立 job，交給 Celery worker 處理，立即回 202。
 
-    每張圖在這裡就做完整驗證（大小、格式、像素數），**只有驗證通過的圖才寫進硬碟**；
-    不合格的圖記在 item_errors，不會讓整批被拒絕（驗收 2.8）。
+    multipart 串流解析：每張圖在讀取時就累計大小，超過 10 MB 的部分直接丟掉（不進記憶體、
+    不寫硬碟），該張記成 FILE_TOO_LARGE。其他驗證（格式、像素數）也在這裡做，
+    **只有驗證通過的圖才寫進硬碟**；不合格的圖記在 item_errors，不會讓整批被拒絕（驗收 2.8）。
     佇列送不出去時，job 標成 failed、刪掉已存的檔案，回 503，不留下永遠 pending 的 job。
     """
-    if not 1 <= len(files) <= settings.max_batch_files:
-        raise AppError("VALIDATION_ERROR", f"一次最多 {settings.max_batch_files} 張", 422)
+    form = await read_multipart(request, settings.max_upload_bytes, settings.max_batch_files)
+    files = form.files_named("files")
+    type_ = form.field("type") or "product"
+    if type_ not in RECOGNIZERS:
+        raise AppError("VALIDATION_ERROR", "type 必須是 product 或 shelf", 422)
+    if not files:
+        raise AppError("VALIDATION_ERROR", "至少要有一張圖片", 422)
     items: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     for index, f in enumerate(files):
         try:
-            img = validate_image_bytes(
-                await read_limited(f, settings.max_upload_bytes), f.filename, settings
-            )
+            img = validate_part(f, settings)
         except AppError as exc:
             errors.append(
                 {"index": index, "filename": f.filename, "code": exc.code, "message": exc.message}
@@ -105,7 +135,7 @@ async def create_batch(
 
     job = Job(
         user_id=user.id,
-        type=type,
+        type=type_,
         status="pending" if items else "done",
         total=len(files),
         done_count=len(errors),

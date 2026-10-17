@@ -1,7 +1,7 @@
 """請求大小限制（ASGI middleware），在 multipart 解析之前就生效（驗收 2.3，Codex 第 2 輪 L2）。
 
-為什麼不能只靠 endpoint 裡的 read_limited：FastAPI 在呼叫 endpoint 之前，就已經把整個 multipart
-請求讀完、寫進暫存檔；超大的上傳在 413 之前就已經消耗了頻寬與硬碟。
+這是整個請求的總量上限（第一道）；每個檔案的大小由 app/services/multipart.py 在串流解析時
+限制（第二道）。兩者都在 FastAPI 解析 multipart、寫暫存檔之前生效。
 
 這裡在最底層攔截：
 - 有 Content-Length 且超過上限：直接回 413，一個 byte 都不讀。

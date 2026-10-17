@@ -8,7 +8,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.errors import not_found
+from app.core.errors import AppError, not_found
 from app.db.models import Job, Recognition, User
 from app.db.session import get_db
 from app.services.registry import ModelRegistry
@@ -24,6 +24,36 @@ def error_responses(*codes: int, auth: bool = True) -> dict[int | str, dict[str,
 
     shared = {401, 422, 429} if auth else {422}
     return {c: {"model": ErrorResponse} for c in sorted(shared | set(codes))}
+
+
+def multipart_doc(
+    file_field: str, *, multiple: bool, description: str, fields: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """上傳端點自己串流解析 multipart（不用 UploadFile），請求格式改用 openapi_extra 寫進文件。"""
+    file_schema: dict[str, Any] = {"type": "string", "format": "binary"}
+    props: dict[str, Any] = {
+        file_field: {"type": "array", "items": file_schema, "description": description}
+        if multiple
+        else {**file_schema, "description": description}
+    }
+    props.update(fields or {})
+    required = [file_field] + [k for k, v in (fields or {}).items() if v.pop("required", False)]
+    schema = {"type": "object", "properties": props, "required": required}
+    return {
+        "requestBody": {"required": True, "content": {"multipart/form-data": {"schema": schema}}}
+    }
+
+
+async def single_image(request: Request, settings: Settings, field: str = "file") -> Any:
+    """讀取並驗證單一圖片欄位：檔案在讀取時就累計大小，超過上限的資料不會進記憶體或硬碟。"""
+    from app.services.multipart import read_multipart
+    from app.services.uploads import validate_part
+
+    form = await read_multipart(request, settings.max_upload_bytes, max_files=1)
+    parts = form.files_named(field)
+    if not parts:
+        raise AppError("VALIDATION_ERROR", f"缺少檔案欄位 {field}", 422)
+    return validate_part(parts[0], settings)
 
 
 def get_storage(request: Request) -> Storage:

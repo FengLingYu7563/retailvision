@@ -111,3 +111,11 @@
 | `/auth/token` 依 client IP 限流：連續猜密碼超過額度回 429，被限流後正確密碼也拿不到 token | L2 | `tests/api/test_auth.py` |
 
 部署注意：反向代理（例如 nginx 的 `client_max_body_size`）也要設定相同上限，做為第二道防線（Phase 3）。
+
+## Codex 審查補充的檢查項目（第 3 輪）
+
+| 項目 | 等級 | 驗證方式 |
+|---|---|---|
+| 每個檔案的 10 MB 上限在串流解析時就生效（`app/services/multipart.py`）：超過的資料不進記憶體、不寫暫存檔；批次裡記成該項目的 FILE_TOO_LARGE，單張與 catalog 回 413 | L2 | `tests/api/test_body_limit.py`（含「完全沒有用到暫存檔」的檢查） |
+| `app/` 不 import torch / torchvision / ultralytics / timm / `training`；`pyproject` 主要依賴不含 torch 系列 | L1 | `tests/unit/test_repo_hygiene.py` |
+| `.env`、資料集、checkpoint、`.onnx`、`.joblib` 不被 git 追蹤 | L2 | `tests/unit/test_repo_hygiene.py`、`tests/api/test_misc.py` |

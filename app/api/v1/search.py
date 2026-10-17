@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, Query, Request
 
-from app.api.deps import DB, AppSettings, RegistryDep, error_responses
+from app.api.deps import DB, AppSettings, RegistryDep, error_responses, multipart_doc, single_image
 from app.core.errors import AppError
 from app.core.ratelimit import LimitedUser
 from app.schemas import SearchOut, SimilarHit
 from app.services import catalog
-from app.services.uploads import read_and_validate
 
 router = APIRouter(tags=["search"])
 
@@ -18,9 +17,12 @@ router = APIRouter(tags=["search"])
     "/search/similar",
     response_model=SearchOut,
     responses=error_responses(400, 413, 415, 503),
+    openapi_extra=multipart_doc(
+        "file", multiple=False, description="查詢用的商品照片（jpg / png / webp，10 MB 以內）"
+    ),
 )
 async def search_similar(
-    file: Annotated[UploadFile, File()],
+    request: Request,
     user: LimitedUser,
     db: DB,
     registry: RegistryDep,
@@ -35,7 +37,7 @@ async def search_similar(
     clf = registry.classifier
     if clf is None:
         raise AppError("MODEL_NOT_READY", "分類模型尚未載入", 503)
-    img = await read_and_validate(file, settings)
+    img = await single_image(request, settings)
     hits = catalog.search(db, clf, img.image, k)
     return SearchOut(
         model_version=clf.version,

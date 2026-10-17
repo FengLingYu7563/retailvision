@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Iterator
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.bodylimit import BodySizeLimitMiddleware, limit_for
@@ -93,6 +94,70 @@ def test_batch_total_size_limit(user_token: str, registry) -> None:  # type: ign
         ]
         r = c.post("/api/v1/recognitions/batch", files=files, headers=auth(user_token))
     assert_error(r, 413, "FILE_TOO_LARGE")
+
+
+def test_oversized_batch_item_is_dropped_while_streaming(
+    client: TestClient, user_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """總量在批次上限內、但單一檔案超過 10 MB：只有那張記成 FILE_TOO_LARGE，其他照常處理；
+    而且整個請求都沒有用到暫存檔（超過的資料在讀取時就丟掉）。"""
+    import tempfile
+
+    def no_spool(*_a: object, **_k: object) -> None:
+        raise AssertionError("不應該把上傳內容寫進暫存檔")
+
+    monkeypatch.setattr(tempfile, "SpooledTemporaryFile", no_spool)
+    files = [
+        ("files", ("ok.jpg", jpeg(textured(RED)), "image/jpeg")),
+        ("files", ("huge.jpg", b"\xff\xd8\xff" + b"\0" * (30 * MB), "image/jpeg")),
+        ("files", ("ok2.jpg", jpeg(textured(RED)), "image/jpeg")),
+    ]
+    r = client.post("/api/v1/recognitions/batch", files=files, headers=auth(user_token))
+    assert r.status_code == 202, r.text
+    job = client.get(f"/api/v1/jobs/{r.json()['job_id']}", headers=auth(user_token)).json()
+    assert job["failed_count"] == 1 and len(job["recognition_ids"]) == 2
+    assert job["item_errors"][0]["index"] == 1
+    assert job["item_errors"][0]["code"] == "FILE_TOO_LARGE"
+
+
+def test_oversized_catalog_reference_413(client: TestClient, user_token: str) -> None:
+    files = [
+        ("files", ("a.jpg", jpeg(textured(RED)), "image/jpeg")),
+        ("files", ("b.jpg", b"\xff\xd8\xff" + b"\0" * (15 * MB), "image/jpeg")),
+    ]
+    r = client.post(
+        "/api/v1/catalog/products", data={"name": "X"}, files=files, headers=auth(user_token)
+    )
+    assert_error(r, 413, "FILE_TOO_LARGE")
+
+
+def test_streaming_parser_discards_oversized_part() -> None:
+    """解析器層級：超過上限的檔案不保留任何資料，記憶體用量不會隨檔案大小成長。"""
+    from starlette.requests import Request
+
+    from app.services.multipart import read_multipart
+
+    boundary = b"xyz"
+    body = (
+        b'--xyz\r\nContent-Disposition: form-data; name="files"; filename="big.jpg"\r\n\r\n'
+        + b"\0" * (3 * MB)
+        + b'\r\n--xyz\r\nContent-Disposition: form-data; name="type"\r\n\r\nshelf'
+        + b"\r\n--xyz--\r\n"
+    )
+    chunks = [body[i : i + 64 * 1024] for i in range(0, len(body), 64 * 1024)]
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": chunks.pop(0), "more_body": bool(chunks)}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "headers": [(b"content-type", b"multipart/form-data; boundary=" + boundary)],
+    }
+    form = asyncio.run(read_multipart(Request(scope, receive), max_part_bytes=MB, max_files=5))
+    part = form.files_named("files")[0]
+    assert part.too_large and len(part.data) == 0
+    assert form.field("type") == "shelf"
 
 
 def test_json_endpoints_have_small_limit(client: TestClient, admin_token: str) -> None:

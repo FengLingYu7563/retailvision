@@ -1,7 +1,8 @@
 """上傳檔案驗證與儲存（驗收 2.3、2.6，以及 Phase 2 調整第 6 點）。
 
 驗證順序，每一步失敗都回固定的錯誤碼，不會讓服務崩潰：
-1. 大小：讀取時最多讀 上限 + 1 bytes，超過就停，不把整個大檔讀進記憶體。
+1. 大小：在更早的兩層就限制了，這裡再檢查一次——整個請求的大小由 app/core/bodylimit.py 限制，
+   每個檔案的大小由 app/services/multipart.py 在串流讀取時限制（超過的資料不進記憶體）。
 2. 副檔名白名單：只看最後一個副檔名，大小寫不拘。
 3. magic bytes：用檔頭判斷實際格式，改副檔名的假圖片（例如文字檔改成 .jpg）在這裡擋下。
 4. 像素數：只讀檔頭拿到寬高（不解碼），超過上限就拒絕，防止 decompression bomb。
@@ -18,11 +19,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import UploadFile
 from PIL import Image as PILImage
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.services.multipart import FilePart
 from vision.io import Image, InvalidImageError, decode_image
 
 ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -44,13 +45,6 @@ def sniff_format(data: bytes) -> str | None:
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return ".webp"
     return None
-
-
-async def read_limited(upload: UploadFile, max_bytes: int) -> bytes:
-    data = await upload.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise AppError("FILE_TOO_LARGE", f"檔案超過 {max_bytes // (1024 * 1024)} MB 上限", 413)
-    return data
 
 
 def validate_image_bytes(data: bytes, filename: str | None, settings: Settings) -> ValidatedImage:
@@ -82,9 +76,13 @@ def validate_image_bytes(data: bytes, filename: str | None, settings: Settings) 
     return ValidatedImage(data=data, image=image, ext=real)
 
 
-async def read_and_validate(upload: UploadFile, settings: Settings) -> ValidatedImage:
-    data = await read_limited(upload, settings.max_upload_bytes)
-    return validate_image_bytes(data, upload.filename, settings)
+def validate_part(part: FilePart, settings: Settings) -> ValidatedImage:
+    """串流解析出來的檔案：超過大小上限的在讀取時就已經被丟掉，這裡只回報錯誤。"""
+    if part.too_large:
+        raise AppError(
+            "FILE_TOO_LARGE", f"檔案超過 {settings.max_upload_bytes // (1024 * 1024)} MB 上限", 413
+        )
+    return validate_image_bytes(bytes(part.data), part.filename, settings)
 
 
 class Storage:
