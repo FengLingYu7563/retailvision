@@ -59,7 +59,7 @@ def test_db_active_model_missing_returns_model_not_ready(
     from app.main import create_app
     from tests.api.conftest import RED, FakeClassifier, FakeDetector, auth, jpeg, textured
 
-    def loader(name: str) -> FakeClassifier:
+    def loader(name: str, onnx_path: str | None = None) -> FakeClassifier:
         if name == "cls-fake-b":
             raise RuntimeError("corrupt onnx")
         return FakeClassifier(name)
@@ -94,7 +94,7 @@ def test_healthz_as_first_request_after_switch_to_broken_model(db) -> None:  # t
     from app.main import create_app
     from tests.api.conftest import FakeClassifier, FakeDetector
 
-    def loader(name: str) -> FakeClassifier:
+    def loader(name: str, onnx_path: str | None = None) -> FakeClassifier:
         if name == "cls-fake-b":
             raise RuntimeError("corrupt onnx")
         return FakeClassifier(name)
@@ -140,6 +140,63 @@ def test_no_active_classifier_in_db_disables_stale_model(user_token: str, db) ->
         db.commit()
         r = c.post("/api/v1/recognitions/product", files=img, headers=auth(user_token))
         assert r.status_code == 201 and r.json()["model_version"] == "cls-fake-a"
+
+
+def test_loader_uses_onnx_path_from_db(tmp_path: Path) -> None:
+    """模型檔名可以和版本名稱不同：以 model_versions.onnx_path 為準（Codex 第 8 輪 L1）。"""
+    import pytest
+
+    from app.services.registry import onnx_classifier_loader
+
+    src = ROOT / "models" / "cls-dinov2-v2.onnx"
+    if not src.exists():
+        pytest.skip("需要本機的 ONNX 權重")
+    shutil.copy(src, tmp_path / "renamed-file.onnx")
+    shutil.copy(src.with_suffix(".json"), tmp_path / "renamed-file.json")
+    load = onnx_classifier_loader(_settings(tmp_path))
+
+    assert load("cls-dinov2-v2", "renamed-file.onnx").version == "cls-dinov2-v2"
+    # metadata 記錄的版本和資料庫不同：拒絕，避免列到錯的檔案
+    with pytest.raises(ValueError, match="版本"):
+        load("cls-other", "renamed-file.onnx")
+    with pytest.raises(FileNotFoundError):
+        load("cls-dinov2-v2", "missing.onnx")
+
+
+def test_loader_rejects_path_outside_models_dir(tmp_path: Path) -> None:
+    import pytest
+
+    from app.services.registry import onnx_classifier_loader
+
+    load = onnx_classifier_loader(_settings(tmp_path / "models"))
+    for bad in ("../secret.onnx", "../../etc/passwd", str(tmp_path / "abs.onnx")):
+        with pytest.raises(ValueError, match="模型資料夾"):
+            load("x", bad)
+
+
+def test_switch_uses_onnx_path(db, admin_token: str) -> None:  # type: ignore[no-untyped-def]
+    """PUT /models/active 與 sync 都把資料庫的 onnx_path 傳給 loader。"""
+    from sqlalchemy import text
+
+    from app.main import create_app
+    from tests.api.conftest import FakeClassifier, FakeDetector, auth
+
+    calls: list[tuple[str, str | None]] = []
+
+    def loader(name: str, onnx_path: str | None = None) -> FakeClassifier:
+        calls.append((name, onnx_path))
+        return FakeClassifier(name, onnx_path)
+
+    reg = ModelRegistry(loader, FakeDetector(), None)
+    reg.load_classifier("cls-fake-a")
+    db.execute(
+        text("UPDATE model_versions SET onnx_path = 'files/b-v2.onnx' WHERE name = 'cls-fake-b'")
+    )
+    db.commit()
+    with TestClient(create_app(registry=reg, settings=get_settings())) as c:
+        r = c.put("/api/v1/models/active", json={"name": "cls-fake-b"}, headers=auth(admin_token))
+        assert r.status_code == 200, r.text
+    assert ("cls-fake-b", "files/b-v2.onnx") in calls
 
 
 def test_missing_gap_classifier_falls_back_to_v1(tmp_path: Path) -> None:

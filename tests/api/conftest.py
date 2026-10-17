@@ -61,8 +61,9 @@ class FakeClassifier:
     沒有重新計算 catalog embedding 就切換模型的話，搜尋結果會錯（用來測 3.6）。
     """
 
-    def __init__(self, version: str) -> None:
+    def __init__(self, version: str, onnx_path: str | None = None) -> None:
         self.version = version
+        self.onnx_path = onnx_path
         # crc32 而不是 hash()：hash 每個 process 的種子不同，測試要可重現
         self._perm = np.random.default_rng(zlib.crc32(version.encode())).permutation(48)
 

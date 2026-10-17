@@ -48,17 +48,28 @@ class DetectorLike(Protocol):
     def detect(self, img: Image) -> list[Box]: ...
 
 
-ClassifierLoader = Callable[[str], ClassifierLike]
+# (版本名稱, model_versions.onnx_path) -> 分類模型。
+# onnx_path 是 None 時用 {name}.onnx（啟動時載入設定檔的預設版本）
+ClassifierLoader = Callable[[str, str | None], ClassifierLike]
 
 
 def onnx_classifier_loader(settings: Settings) -> ClassifierLoader:
-    def load(name: str) -> ClassifierLike:
+    def load(name: str, onnx_path: str | None) -> ClassifierLike:
+        """依資料庫的 onnx_path 載入（Codex 第 8 輪 L1：不假設檔名等於版本名稱）。"""
         from vision.classifier import OnnxClassifier
 
-        path = settings.models_dir / f"{name}.onnx"
+        root = settings.models_dir.resolve()
+        path = (root / (onnx_path or f"{name}.onnx")).resolve()
+        # onnx_path 來自資料庫，仍然檢查不會跑出模型資料夾
+        if not path.is_relative_to(root):
+            raise ValueError(f"模型路徑不在模型資料夾內：{onnx_path}")
         if not path.exists():
             raise FileNotFoundError(path)
-        return OnnxClassifier(path, threads=settings.onnx_threads)
+        clf = OnnxClassifier(path, threads=settings.onnx_threads)
+        # 檔案旁邊的 metadata 記錄的版本必須和資料庫一致，避免列到錯的檔案卻沒發現
+        if clf.version != name:
+            raise ValueError(f"{path.name} 的版本是 {clf.version}，不是資料庫記錄的 {name}")
+        return clf
 
     return load
 
@@ -119,16 +130,16 @@ class ModelRegistry:
     def classifier(self) -> ClassifierLike | None:
         return self._classifier
 
-    def load_classifier(self, name: str) -> ClassifierLike:
-        clf = self._load_classifier(name)
+    def load_classifier(self, name: str, onnx_path: str | None = None) -> ClassifierLike:
+        clf = self._load_classifier(name, onnx_path)
         with self._lock:
             self._classifier = clf
         log.info("分類模型 %s 已載入", name)
         return clf
 
-    def build_classifier(self, name: str) -> ClassifierLike:
+    def build_classifier(self, name: str, onnx_path: str | None = None) -> ClassifierLike:
         """只建立、不切換：切換前要先用新模型重新計算 catalog embedding。"""
-        return self._load_classifier(name)
+        return self._load_classifier(name, onnx_path)
 
     def set_classifier(self, clf: ClassifierLike) -> None:
         with self._lock:
@@ -141,11 +152,12 @@ class ModelRegistry:
         需要它的端點回 MODEL_NOT_READY，貨架分析（只用偵測模型）不受影響。
         同一個壞掉的版本 RETRY_SECONDS 內不重試，避免每個請求都去解析一次壞檔。
         """
-        active = (
-            db.query(ModelVersion.name)
+        row = (
+            db.query(ModelVersion.name, ModelVersion.onnx_path)
             .filter(ModelVersion.task == "classification", ModelVersion.is_active.is_(True))
-            .scalar()
+            .first()
         )
+        active, onnx_path = (row.name, row.onnx_path) if row else (None, None)
         current = self._classifier.version if self._classifier else None
         if not active:
             # 資料庫沒有任何使用中的分類模型（還沒 seed、或全部被設成 inactive）：
@@ -162,7 +174,7 @@ class ModelRegistry:
             return
         log.info("偵測到使用中模型改為 %s，重新載入", active)
         try:
-            self.load_classifier(active)
+            self.load_classifier(active, onnx_path)
             self._failed = None
         except Exception:
             log.error(
