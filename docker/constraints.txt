@@ -1,5 +1,5 @@
 # 由 .venv 產生的版本鎖定（API / worker 映像檔用）：確保 scikit-learn 等版本和訓練環境一致，
-# 空位分類器（joblib）才能正確載入。重新產生：見 docker/README 或 CLAUDE.md。
+# 空位分類器（joblib）才能正確載入。重新產生：在 .venv 執行 pip freeze，只保留 API 主要依賴樹（不含 torch 等訓練套件）。
 alembic==1.20.0
 amqp==5.4.1
 annotated-doc==0.0.5

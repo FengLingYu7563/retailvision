@@ -63,7 +63,7 @@
 |---|---|---|
 | 3.1 | 通過 | `cp .env.example .env`、填入三個密鑰後 `docker compose up -d --build`：API 啟動時自動 migrate、登錄模型、建立 admin；經 nginx 的 `/healthz` 回 200。只有 nginx 對 host 開埠 |
 | 3.2 | 通過 | `retailvision/api` 822 MB；`pip list` 不含 torch、torchvision、ultralytics、timm（CI 的 docker job 也會檢查） |
-| 3.3 | 待確認 | `.github/workflows/ci.yml`：lint、test（PostgreSQL / Redis service container、覆蓋率 >= 80%）、docker；push 後看 CI 結果 |
+| 3.3 | 通過 | GitHub Actions run 39097838674：lint、test（PostgreSQL / Redis service container，125 passed、12 skipped 為需要權重或資料集的測試，覆蓋率 95.5%）、docker（不含 torch、< 1.5 GB）全部綠燈 |
 | 3.4 | 通過 | `docker compose --profile camera up -d camera`，丟 5 張圖，最慢 2.55 秒出現在 `/recognitions`，檔案全部移到 `processed/` |
 | 3.5 | 通過 | 儀表板四頁實測：上傳辨識（Granny-Smith 77.8%、粗類 Apple 91.0%、129 ms）、歷史列表與標註圖、類別分布、每日趨勢、缺貨率；截圖在 `docs/screenshots/` |
 | 3.6 | 通過 | Phase 2 整合測試；docker 環境另跑 `tools/check_model_switch.py`：API 與 worker 都從 cls-dinov2-v2 切到 cls-mnv3-v1 再切回，沒有重啟容器 |
@@ -83,3 +83,10 @@
 | 3.12 | 沒放權重時所有服務仍會啟動，`/healthz` 回 503（liveness 與 readiness 分開） | L1 | 通過 | healthcheck 改用 `/livez`；空的模型資料夾實測：所有容器起來、api healthy、經 nginx 的 `/healthz` 回 503 並列出缺少的模型 |
 
 3.1 的步驟因此多了「填入三個密鑰」：照抄範例檔就能啟動，等於所有部署共用公開的 JWT 金鑰與 admin 密碼（Codex L2）。
+
+## Codex 審查補充的檢查項目（第 2 輪 criteria_gaps）
+
+| # | 項目 | 等級 | 狀態 | 證據 |
+|---|---|---|---|---|
+| 3.13 | 模擬相機只處理監看資料夾直接底下的一般圖片檔；符號連結、特殊檔案、跑出資料夾的路徑一律拒絕 | L2 | 通過 | `tools/camera_sim.py` 的 `scan()`（lstat）與 `read_regular_file()`（O_NOFOLLOW + fstat）；Linux 容器實測：符號連結與 FIFO 移到 `failed/`、O_NOFOLLOW 擋下競爭、資料夾外的檔案沒被讀取；`tests/unit/test_camera_sim.py`（CI 在 Linux 跑符號連結測試） |
+| 3.14 | 自動化服務（模擬相機）用最小權限帳號，不 fallback 到 admin | L2 | 通過 | compose 移除 ADMIN_* fallback；沒設 CAMERA_* 時 camera_sim 直接結束並提示建一般使用者；實測以 role=user 的 camera 帳號送辨識成功 |

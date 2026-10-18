@@ -64,9 +64,11 @@ API 容器啟動時會自動執行 `alembic upgrade head`、登錄 `models/` 裡
 
 - 儀表板：http://localhost:8080/
 - OpenAPI 文件：http://localhost:8080/docs
-- 模擬相機：`docker compose --profile camera up -d camera`，把圖片放進 `camera_inbox/`，
+- 模擬相機：先建一般使用者 `docker compose exec api python -m app.cli create-user camera --role user`
+  並在 `.env` 設定 `CAMERA_USERNAME` / `CAMERA_PASSWORD`（不會 fallback 到 admin），
+  再 `docker compose --profile camera up -d camera`，把圖片放進 `camera_inbox/`，
   約 1 到 3 秒後出現在歷史紀錄，檔案移到 `camera_inbox/processed/`（失敗的移到 `failed/` 並附錯誤訊息）。
-  帳密用 `.env` 的 `CAMERA_USERNAME` / `CAMERA_PASSWORD`（建議另建一個一般使用者帳號）。
+  只處理資料夾直接底下的一般圖片檔；符號連結與特殊檔案會被移到 `failed/`，不會讀取它指向的內容。
 
 ### curl 範例
 

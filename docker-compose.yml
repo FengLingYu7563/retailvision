@@ -116,7 +116,8 @@ services:
     restart: unless-stopped
 
   # 模擬相機（驗收 3.4）：把圖片丟進 ./camera_inbox，就會自動送去辨識。
-  # 選用：docker compose --profile camera up -d
+  # 選用：先建一般使用者 docker compose exec api python -m app.cli create-user camera --role user，
+  # 在 .env 設定 CAMERA_USERNAME / CAMERA_PASSWORD，再 docker compose --profile camera up -d camera
   camera:
     profiles: ["camera"]
     image: retailvision/dashboard:latest
@@ -124,8 +125,10 @@ services:
     environment:
       API_BASE: http://nginx
       CAMERA_TYPE: ${CAMERA_TYPE:-product}
-      CAMERA_USERNAME: ${CAMERA_USERNAME:-${ADMIN_USERNAME:-}}
-      CAMERA_PASSWORD: ${CAMERA_PASSWORD:-${ADMIN_PASSWORD:-}}
+      # 不 fallback 到 admin：相機只需要一般使用者權限（最小權限），沒設定時 camera_sim 直接結束並說明。
+      # 這裡不能用 :?，否則沒啟用 camera profile 的 docker compose up 也會因為缺變數失敗
+      CAMERA_USERNAME: ${CAMERA_USERNAME:-}
+      CAMERA_PASSWORD: ${CAMERA_PASSWORD:-}
     volumes:
       - ./tools:/srv/tools:ro
       - ./camera_inbox:/srv/camera_inbox
