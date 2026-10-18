@@ -22,6 +22,29 @@
       "p95": 454.7
     }
   },
+  "api_latency_docker": {
+    "machine": {
+      "cpu": "AMD Ryzen 7 4800H with Radeon Graphics",
+      "logical_cpus": 16,
+      "os": "Windows 11",
+      "python": "3.12.10"
+    },
+    "method": "client 端端到端延遲，依序送出、不並行；API 與資料庫在同一台機器；ONNX Runtime CPU；壓測時 RATE_LIMIT_PER_MINUTE 調高；docker compose（nginx -> uvicorn，Linux 容器，WSL2）",
+    "pass_product_p95_lt_300ms": true,
+    "pass_shelf_p95_lt_1500ms": true,
+    "product": {
+      "mean": 101.5,
+      "n": 100,
+      "p50": 94.4,
+      "p95": 139.2
+    },
+    "shelf": {
+      "mean": 365.0,
+      "n": 30,
+      "p50": 335.4,
+      "p95": 504.7
+    }
+  },
   "catalog_threshold": {
     "chosen": {
       "accuracy": 0.9155,

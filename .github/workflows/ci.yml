@@ -1,0 +1,78 @@
+# CI（驗收 3.3、3.2）：不需要 GPU，也不下載資料集或權重。
+# 需要資料集或權重的測試由 marker 自動 skip（tests/conftest.py），API 測試用假的 vision 模型。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 和本機開發用同一版 ruff，format 檢查結果才會一致
+      - run: pip install ruff==0.17.0
+      - run: ruff check vision training tests app tools dashboard migrations
+      - run: ruff format --check vision training tests app tools dashboard migrations
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: retail
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: retailvision_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U retail" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+    env:
+      # CI 專用的值，不是任何真實環境的 secret
+      TEST_DATABASE_URL: postgresql+psycopg://retail:ci-only-password@127.0.0.1:5432/retailvision_test
+      DATABASE_URL: postgresql+psycopg://retail:ci-only-password@127.0.0.1:5432/retailvision_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      YOLO_AUTOINSTALL: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # 只裝主要依賴與 dev 依賴：不含 PyTorch，需要 torch 的測試自動 skip
+      - run: pip install --constraint docker/constraints.txt -e ".[dev]"
+      - run: mypy
+      - run: pytest --cov=vision --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=80
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -f docker/Dockerfile.api -t retailvision/api:ci .
+      - name: API image has no PyTorch and is under 1.5 GB (3.2)
+        run: |
+          docker run --rm --entrypoint python retailvision/api:ci -c \
+            "import importlib.util as u, sys; bad=[m for m in ('torch','torchvision','ultralytics','timm') if u.find_spec(m)]; print('heavy packages:', bad); sys.exit(1 if bad else 0)"
+          size=$(docker image inspect retailvision/api:ci --format '{{.Size}}')
+          echo "image size: $((size / 1024 / 1024)) MB"
+          test "$size" -lt $((1536 * 1024 * 1024))
+      - name: Build dashboard image
+        run: docker build -f docker/Dockerfile.dashboard -t retailvision/dashboard:ci .

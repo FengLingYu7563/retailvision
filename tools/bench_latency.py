@@ -4,6 +4,8 @@
 結果與機器規格寫入 models/metrics.json 的 api_latency。
 
   python -m tools.bench_latency --base http://127.0.0.1:8000
+  python -m tools.bench_latency --base http://localhost:8080 --metrics-key api_latency_docker
+      --note "；docker compose（nginx -> uvicorn，Linux 容器）"   # 接在上一行後面
 """
 
 from __future__ import annotations
@@ -61,6 +63,8 @@ def main() -> int:
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--product-n", type=int, default=100)
     ap.add_argument("--shelf-n", type=int, default=30)
+    ap.add_argument("--metrics-key", default="api_latency", help="寫入 metrics.json 的 key")
+    ap.add_argument("--note", default="", help="附加在 method 後面的說明（例如部署環境）")
     args = ap.parse_args()
 
     from sqlalchemy import delete
@@ -99,10 +103,10 @@ def main() -> int:
             },
             "method": (
                 "client 端端到端延遲，依序送出、不並行；API 與資料庫在同一台機器；"
-                "ONNX Runtime CPU；壓測時 RATE_LIMIT_PER_MINUTE 調高"
+                "ONNX Runtime CPU；壓測時 RATE_LIMIT_PER_MINUTE 調高" + args.note
             ),
         }
-        update_metrics("api_latency", result)
+        update_metrics(args.metrics_key, result)
         print(result)
         return (
             0 if result["pass_product_p95_lt_300ms"] and result["pass_shelf_p95_lt_1500ms"] else 1

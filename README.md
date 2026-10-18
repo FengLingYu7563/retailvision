@@ -6,7 +6,109 @@
 2. **貨架分析**：拍一排貨架，算出商品數量、缺貨空位、陳列密度。
 3. **新品登錄與以圖搜圖**：新商品不用重新訓練，上傳幾張參考圖就能辨識。
 
-> 目前進度：**Phase 1（模型）與 Phase 2（API 與資料庫）完成**。部署、CI、儀表板為 Phase 3。
+> 進度：Phase 1（模型）、Phase 2（API 與資料庫）、Phase 3（部署、CI、儀表板）完成。
+
+![貨架分析標註圖：綠框為商品，紅框為判斷出的缺貨空位](docs/screenshots/shelf_annotated.jpg)
+
+## 架構
+
+```mermaid
+flowchart LR
+    U[瀏覽器 / curl] --> N[nginx :8080<br/>上傳大小限制、安全標頭、request_id]
+    CAM[模擬相機<br/>tools/camera_sim.py] --> N
+    N -->|/api/ /docs /healthz| A[FastAPI<br/>uvicorn]
+    N -->|/| D[Streamlit 儀表板<br/>只呼叫 API]
+    D --> N
+    A --> P[(PostgreSQL 16)]
+    A --> R[(Redis<br/>rate limit / 佇列)]
+    R --> W[Celery worker<br/>批次辨識]
+    W --> P
+    A & W --> M[[models/<br/>ONNX + 空位分類器]]
+    A & W --> S[[storage volume<br/>原圖與標註圖]]
+```
+
+- 對外只開 nginx 一個埠；API、資料庫、Redis 不直接對外（資料庫和 Redis 只綁 127.0.0.1，方便本機除錯）。
+- API 和 worker 用同一個映像檔（`docker/Dockerfile.api`，不含 PyTorch，822 MB），推論只用 ONNX Runtime。
+- 使用中的模型版本以資料庫為準：切換後 API 和 worker 的下一個請求就改用新模型，不需重啟。
+
+## 快速開始（docker compose）
+
+需要 Docker 與下列模型檔（放在 `models/`）。**權重不在 repo 裡**：模型是用研究用途授權的資料集訓練的，
+不公開散布，請依「重現步驟」自行訓練產生。
+
+| 檔案 | 用途 | 產生方式 |
+|---|---|---|
+| `cls-dinov2-v2.onnx` / `.json` | 單品分類與 embedding（上線版本） | `training.train_metric` + `training.export_onnx` |
+| `cls-mnv3-v1.onnx` / `.json` | 單品分類 v1（對照，可切換） | `training.train_classifier` + `training.export_onnx` |
+| `det-yolov8n-v1.onnx` / `.json` | 貨架商品偵測 | `training.train_detector` + `training.export_onnx` |
+| `gap_classifier.joblib` / `.json` | 缺貨空位分類器 | `training.fit_gap_classifier` |
+
+```bash
+cp .env.example .env      # 修改 JWT_SECRET、POSTGRES_PASSWORD、ADMIN_PASSWORD
+docker compose up -d --build
+curl http://localhost:8080/healthz
+```
+
+API 容器啟動時會自動執行 `alembic upgrade head`、登錄 `models/` 裡的模型版本，並依 `.env` 的
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` 建立 admin（已存在就略過，不會覆寫密碼）。
+沒有放模型檔時服務仍會啟動，`/healthz` 回 503 並指出缺哪個模型。
+
+- 儀表板：http://localhost:8080/
+- OpenAPI 文件：http://localhost:8080/docs
+- 模擬相機：`docker compose --profile camera up -d camera`，把圖片放進 `camera_inbox/`，
+  約 1 到 3 秒後出現在歷史紀錄，檔案移到 `camera_inbox/processed/`（失敗的移到 `failed/` 並附錯誤訊息）。
+  帳密用 `.env` 的 `CAMERA_USERNAME` / `CAMERA_PASSWORD`（建議另建一個一般使用者帳號）。
+
+### curl 範例
+
+```bash
+BASE=http://localhost:8080/api/v1
+TOKEN=$(curl -s -X POST $BASE/auth/token -d "username=admin&password=<你的密碼>" | jq -r .access_token)
+AUTH="Authorization: Bearer $TOKEN"
+
+# 單品辨識
+curl -s -X POST $BASE/recognitions/product -H "$AUTH" -F "file=@apple.jpg"
+
+# 貨架分析，下載標註圖
+ID=$(curl -s -X POST $BASE/recognitions/shelf -H "$AUTH" -F "file=@shelf.jpg" | jq -r .id)
+curl -s $BASE/recognitions/$ID/annotated -H "$AUTH" -o shelf_annotated.jpg
+
+# 批次辨識（Celery），查詢進度
+JOB=$(curl -s -X POST $BASE/recognitions/batch -H "$AUTH" -F "files=@a.jpg" -F "files=@b.jpg" | jq -r .job_id)
+curl -s $BASE/jobs/$JOB -H "$AUTH"
+
+# 新品登錄（1 到 5 張參考圖）與以圖搜圖
+curl -s -X POST $BASE/catalog/products -H "$AUTH" -F "name=新口味燕麥奶" -F "files=@ref1.jpg" -F "files=@ref2.jpg"
+curl -s -X POST $BASE/search/similar -H "$AUTH" -F "file=@query.jpg"
+
+# 歷史、統計、切換模型（admin）
+curl -s "$BASE/recognitions?type=product&page=1&size=20" -H "$AUTH"
+curl -s "$BASE/stats/summary?days=30" -H "$AUTH"
+curl -s -X PUT $BASE/models/active -H "$AUTH" -H "Content-Type: application/json" -d '{"name": "cls-mnv3-v1"}'
+```
+
+## 模型比較
+
+| 任務 | 模型 | 主要指標（測試集） | CPU 延遲 p95 | 狀態 |
+|---|---|---|---|---|
+| 單品分類 | HSV + HOG + SVM | 細類 31.3% | 約 8 ms | baseline |
+| 單品分類 | v1 MobileNetV3-Large | 細類 85.7%、以圖搜圖 52.8% | 7.7 ms | 對照，可切換 |
+| 單品分類 | **v2 DINOv2-small + SupCon** | **細類 95.1%、以圖搜圖 95.3%** | 55.8 ms | 上線 |
+| 貨架偵測 | **YOLOv8n（ONNX）** | **mAP50 0.900** | 212 ms（含空位） | 上線 |
+| 缺貨空位 | v1 規則 | 召回 26.6% / 精確 61.0% | | 對照 |
+| 缺貨空位 | **v2 梯度提升樹** | 召回 56.4% / 精確 38.7%（未達 70%） | | 上線 |
+
+延遲是模型本身（含前處理）；API 端到端延遲見下方。細節在各段落與 `models/metrics.json`。
+
+## Demo 截圖
+
+| 上傳辨識 | 歷史紀錄 |
+|---|---|
+| ![上傳辨識](docs/screenshots/dashboard_upload.jpg) | ![歷史紀錄](docs/screenshots/dashboard_history.jpg) |
+| **統計（類別分布、每日趨勢、缺貨率）** | **模型版本與切換** |
+| ![統計](docs/screenshots/dashboard_stats.jpg) | ![模型版本](docs/screenshots/dashboard_models.jpg) |
+
+截圖與上方標註圖中的商品照片分別來自 Grocery Store Dataset 與 SKU-110K 測試集，只作非商用展示。
 
 ## Phase 1 結果
 
@@ -126,8 +228,12 @@ FastAPI + PostgreSQL 16 + Redis + Celery。基底路徑 `/api/v1`，OpenAPI 文�
 |---|---|---|---|
 | 單品辨識（DINOv2-small） | 88.9 ms | **104.7 ms** | 300 ms |
 | 貨架分析（YOLOv8n + 空位分類器） | 347.6 ms | **454.7 ms** | 1.5 秒 |
+| 單品辨識，docker compose（經 nginx） | 94.4 ms | **139.2 ms** | 300 ms |
+| 貨架分析，docker compose（經 nginx） | 335.4 ms | **504.7 ms** | 1.5 秒 |
 
-機器：AMD Ryzen 7 4800H（16 個邏輯 CPU）、Windows 11、ONNX Runtime CPU。量的是 client 端看到的完整延遲（上傳、驗證、推論、存檔、寫資料庫），依序送出不並行（`tools/bench_latency.py`）。
+機器：AMD Ryzen 7 4800H（16 個邏輯 CPU）、Windows 11、ONNX Runtime CPU；docker 列是同一台機器上 WSL2 的 Linux 容器。
+量的是 client 端看到的完整延遲（上傳、驗證、推論、存檔、寫資料庫），依序送出不並行（`tools/bench_latency.py`），
+壓測時暫時調高 rate limit。結果在 `models/metrics.json` 的 `api_latency`、`api_latency_docker`。
 
 ### 安全設計
 
@@ -139,7 +245,7 @@ FastAPI + PostgreSQL 16 + Redis + Celery。基底路徑 `/api/v1`，OpenAPI 文�
 - Redis 計數的 rate limit（預設每分鐘 60 次）；登入端點依 IP 限制。
 - 空位分類器（pickle 格式）載入前比對 SHA-256，只從模型資料夾載入。
 
-### 本機啟動（Phase 3 會改成 docker compose 一鍵啟動）
+### 不用 docker 的本機開發
 
 ```bash
 cp .env.example .env            # 修改密碼與 JWT_SECRET
@@ -150,6 +256,16 @@ python -m app.cli create-user admin --role admin
 uvicorn app.main:create_app --factory --port 8000
 celery -A app.worker worker --pool=solo   # Windows 只能用 solo pool
 ```
+## Phase 3：部署與 CI
+
+- **CI**（`.github/workflows/ci.yml`）：ruff（版本釘選）、mypy、pytest（PostgreSQL / Redis service container，
+  覆蓋率至少 80%）、建置映像檔並檢查不含 PyTorch 與大小 < 1.5 GB。CI 沒有 GPU、不下載資料集，
+  需要權重或資料集的測試會自動 skip。
+- **映像檔版本**：`docker/constraints.txt` 鎖定和訓練環境相同的套件版本（例如空位分類器是 scikit-learn 1.9.1 的 joblib 檔，版本不同可能載入失敗）。
+- **日誌**：API、uvicorn 都輸出 JSON；request_id 由 nginx 產生並往下傳，錯誤回應的 `request_id` 可以直接對到日誌。
+- **反向代理**：nginx 依端點設定上傳上限（一般 12 MB、批次 101 MB、新品登錄 52 MB），覆寫 `X-Forwarded-For`
+  為實際連線 IP，rate limit 才不會被偽造的 header 繞過。
+
 ## 重現步驟
 
 ```bash
@@ -162,9 +278,12 @@ python training/data/download_sku110k.py        # 約 12.2 GB，多連線續傳
 python training/data/make_splits.py             # 切分檔已 commit，重跑結果相同
 
 python -m training.train_classical
-python -m training.train_classifier
+python -m training.train_classifier                 # v1（cls-mnv3-v1）
+python -m training.train_metric --arch dinov2s --name classifier_dino_metric   # v2
 python -m training.train_detector
-python -m training.export_onnx
+python -m training.export_onnx                      # v1 分類 + 偵測
+python -m training.export_onnx --task classifier --cls-ckpt checkpoints/classifier_dino_metric/best.pt --cls-version cls-dinov2-v2
+python -m training.fit_gap_classifier               # 空位分類器（只用調參集標註）
 python -m training.evaluate
 pytest
 ```

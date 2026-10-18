@@ -38,6 +38,31 @@ def test_cli_create_user_reads_password_from_prompt(
     assert "不一致" in capsys.readouterr().err
 
 
+def test_bootstrap_admin(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.cli import bootstrap_admin
+
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    assert "略過" in bootstrap_admin(db)
+
+    monkeypatch.setenv("ADMIN_USERNAME", "ops")
+    monkeypatch.setenv("ADMIN_PASSWORD", "short")
+    with pytest.raises(ValueError):  # 不符合規則：失敗，不默默略過
+        bootstrap_admin(db)
+
+    monkeypatch.setenv("ADMIN_PASSWORD", "first-password-123")
+    assert "已建立" in bootstrap_admin(db)
+    user = db.scalars(select(User).where(User.username == "ops")).one()
+    assert user.role == "admin"
+    first_hash = user.password_hash
+
+    # 重啟容器、環境變數換了密碼：不覆蓋既有帳號的密碼
+    monkeypatch.setenv("ADMIN_PASSWORD", "another-password-456")
+    assert "已存在" in bootstrap_admin(db)
+    db.refresh(user)
+    assert user.password_hash == first_hash
+
+
 def test_seed_models(db: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name, task in (
         ("cls-x", "classification"),

@@ -36,3 +36,6 @@ storage/
 .idea/
 Thumbs.db
 .DS_Store
+
+# 模擬相機的監看資料夾（執行期資料）
+camera_inbox/

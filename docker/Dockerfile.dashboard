@@ -1,0 +1,15 @@
+# Streamlit 儀表板：只透過 HTTP 呼叫 API，不直接連資料庫（Phase 3 調整第 6 點），
+# 所以不需要 app/ 與 vision/ 的依賴，映像檔小很多。
+FROM python:3.12-slim
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1
+RUN useradd --create-home --uid 10001 app
+COPY docker/constraints-dashboard.txt /tmp/constraints.txt
+RUN pip install --constraint /tmp/constraints.txt streamlit httpx pandas altair
+WORKDIR /srv
+COPY dashboard ./dashboard
+USER app
+EXPOSE 8501
+# maxUploadSize=10：和 API 的單張上限一致（Streamlit 預設 200 MB）；toolbarMode=viewer：隱藏開發用的 Deploy 選單
+CMD ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0", \
+     "--server.headless=true", "--browser.gatherUsageStats=false", "--server.enableXsrfProtection=true", \
+     "--server.maxUploadSize=10", "--client.toolbarMode=viewer"]

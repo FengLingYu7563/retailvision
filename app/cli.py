@@ -4,6 +4,8 @@ python -m app.cli create-user <username> --role admin
     密碼從互動提示輸入，不放在命令列（命令列參數會留在 shell 歷史紀錄裡）
 python -m app.cli seed-models
     依 models/*.json 與 metrics.json 登錄模型版本
+python -m app.cli bootstrap-admin
+    依 ADMIN_USERNAME / ADMIN_PASSWORD 環境變數建立 admin（容器啟動時自動執行）
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 from typing import Any
 
@@ -80,6 +83,23 @@ def seed_models(db: Session) -> list[str]:
     return done
 
 
+def bootstrap_admin(db: Session) -> str:
+    """容器啟動時建立 admin（Phase 3 調整第 2 點）：讀 ADMIN_USERNAME / ADMIN_PASSWORD 環境變數。
+
+    - 沒設定就略過（不強制每個部署都有 admin）。
+    - 帳號已存在就略過，**不會**用環境變數覆蓋既有密碼（避免重啟容器就重設密碼）。
+    - 密碼不符合規則時直接失敗（ValueError -> exit 1），不默默略過，設定錯誤要讓人看到。
+    """
+    username = os.environ.get("ADMIN_USERNAME", "").strip()
+    password = os.environ.get("ADMIN_PASSWORD", "")
+    if not username or not password:
+        return "未設定 ADMIN_USERNAME / ADMIN_PASSWORD，略過建立 admin"
+    if db.scalar(select(User.id).where(User.username == username)):
+        return f"admin {username} 已存在，略過"
+    create_user(db, username, password, "admin")
+    return f"已建立 admin {username}"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m app.cli")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -87,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("username")
     cu.add_argument("--role", choices=["admin", "user"], default="user")
     sub.add_parser("seed-models")
+    sub.add_parser("bootstrap-admin")
     args = ap.parse_args(argv)
 
     db = session_factory()()
@@ -98,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             user = create_user(db, args.username, password, args.role)
             print(f"已建立 {user.username}（{user.role}）")
+        elif args.cmd == "bootstrap-admin":
+            print(bootstrap_admin(db))
         else:
             print("已登錄：", ", ".join(seed_models(db)))
     except ValueError as exc:

@@ -1,0 +1,17 @@
+# 只把建置需要的檔案送進 Docker：資料集、權重、虛擬環境、.env 都不能進映像檔
+.git
+.venv
+.env
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+training
+checkpoints
+runs
+storage
+models
+camera_inbox
+docs
+tests
+*.log

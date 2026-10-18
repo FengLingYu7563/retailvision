@@ -1,0 +1,7 @@
+# 儀表板映像檔的版本鎖定（由 .venv 產生）
+streamlit==1.66.0
+httpx==0.28.1
+pandas==3.0.6
+altair==6.3.0
+numpy==2.5.4
+pyarrow==26.0.0

@@ -1,0 +1,44 @@
+# API 與 Celery worker 共用這個映像檔，啟動指令不同（docker/entrypoint.sh 的 api / worker）。
+# 為什麼共用：兩者的程式與依賴完全相同（app/services 共用），分開建置只會多一份一樣的映像檔。
+#
+# 多階段建置：builder 安裝依賴到 /opt/venv，最終映像只複製 venv 與執行需要的檔案，
+# 不含編譯工具與 pip 快取。只裝 pyproject 的主要依賴，不含 PyTorch（驗收 3.2）。
+
+FROM python:3.12-slim AS builder
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
+WORKDIR /build
+COPY docker/constraints.txt ./constraints.txt
+COPY pyproject.toml ./
+COPY app ./app
+COPY vision ./vision
+# constraints 鎖定和訓練環境相同的版本（例如 scikit-learn：空位分類器是 joblib 存的）
+RUN pip install --constraint constraints.txt .
+
+FROM python:3.12-slim
+# libglib2.0-0：opencv-python-headless 執行時需要
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app \
+    && mkdir -p /data/storage \
+    && chown app:app /data/storage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    STORAGE_DIR=/data/storage \
+    MODELS_DIR=/srv/models
+WORKDIR /srv
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY docker/uvicorn-log.json ./uvicorn-log.json
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 不用 root 執行：容器被攻破時能做的事比較少
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)" || exit 1
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["api"]
