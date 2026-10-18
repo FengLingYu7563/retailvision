@@ -233,10 +233,11 @@ def test_no_string_built_sql() -> None:
 
 # ci-only-password：CI 的 service container 專用、只在 runner 內有效（.github/workflows/ci.yml）
 SECRET_PATTERNS = [
-    re.compile(r"JWT_SECRET\s*=\s*(?!replace-with)[A-Za-z0-9_\-]{20,}"),
-    re.compile(r"POSTGRES_PASSWORD\s*[=:]\s*(?!change-me|ci-only-password)\S{8,}"),
-    re.compile(r"postgresql\+psycopg://[^:\s]+:(?!change-me@|ci-only-password@)[^@\s]{8,}@"),
-    re.compile(r"ADMIN_PASSWORD\s*=\s*\S{8,}"),
+    # [ \t]* 而不是 \s*：值留空時不能跨到下一行；(?!\$\{) 排除 compose 的變數引用
+    re.compile(r"JWT_SECRET[ \t]*=[ \t]*(?!replace-with)[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"POSTGRES_PASSWORD[ \t]*[=:][ \t]*(?!change-me|ci-only-password|\$\{)\S{8,}"),
+    re.compile(r"postgresql\+psycopg://[^:\s]+:(?!change-me@|ci-only-password@|\$\{)[^@\s]{8,}@"),
+    re.compile(r"ADMIN_PASSWORD[ \t]*=[ \t]*\S{8,}"),
 ]
 
 
