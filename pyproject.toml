@@ -43,6 +43,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "httpx2>=2.13",  # starlette 1.x 的 TestClient 需要
+    "httpx>=0.28",  # tools/（模擬相機、壓測）與其測試
     "ruff>=0.6",
     "mypy>=1.10",
 ]
