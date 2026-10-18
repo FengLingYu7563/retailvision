@@ -50,20 +50,20 @@
 
 ## Last Progress
 
-**Phase 1、Phase 2 完成**（Phase 2 的 Codex 審查第 10 輪 PASS），尚未開始 Phase 3。
-狀態表在 `docs/ACCEPTANCE_PHASE1.md`、`docs/ACCEPTANCE_PHASE2.md`（含 Codex 各輪補充的檢查項目）。
+**Phase 1、2 完成；Phase 3 實作完成，等 CI 結果與 Codex 審查**。狀態表在 `docs/ACCEPTANCE_PHASE{1,2,3}.md`。
 
-- 上線模型：分類 / embedding `cls-dinov2-v2`、偵測 `det-yolov8n-v1`、空位分類器 `models/gap_classifier.*`（GBT）。
-- API：`uvicorn app.main:create_app --factory`；PostgreSQL / Redis 用 `docker compose up -d db redis`；
-  測試資料庫 `retailvision_test`（API 測試會自動 migrate 與清空）。
-- 1.8（L3）未達標並已記錄。15 張評估集已用掉，改方法要另標新的評估集。
+- 公開 repo：https://github.com/FengLingYu7563/retailvision（2026-10-18 建立並 push）。
+- docker compose：db、redis、api、worker（同一映像檔）、dashboard、nginx（唯一對外，8080），camera 在 profile camera。
+  API 啟動時自動 migrate、seed-models、bootstrap-admin（讀 `.env` 的 ADMIN_*）。
+- 映像檔套件版本鎖在 `docker/constraints.txt`（scikit-learn 1.9.1 要和 joblib 模型一致）。
+- 3.1、3.2、3.4 到 3.8 實測通過；docker 延遲單品 p95 139 ms、貨架 505 ms（`api_latency_docker`）。
 
 ## Todos
 
-1. 跟使用者確認再開始 Phase 3（Docker、CI、模擬相機、Streamlit、README），先寫驗收標準給使用者審核。
-   Phase 3 要記得：反向代理也設 client_max_body_size（上傳上限的第二道防線）；Celery worker 在 Linux 容器裡跑（不用 solo pool）。
-2. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
-3. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
+1. 確認 GitHub Actions CI 綠燈（3.3），失敗就修。
+2. Phase 3 送 Codex 審查，L1 / L2 FAIL 必修，迭代到 PASS。
+3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
 
 ## Important Decisions
 
