@@ -88,5 +88,5 @@
 
 | # | 項目 | 等級 | 狀態 | 證據 |
 |---|---|---|---|---|
-| 3.13 | 模擬相機只處理監看資料夾直接底下的一般圖片檔；符號連結、特殊檔案、跑出資料夾的路徑一律拒絕 | L2 | 通過 | `tools/camera_sim.py` 的 `scan()`（lstat）與 `read_regular_file()`（O_NOFOLLOW + fstat）；Linux 容器實測：符號連結與 FIFO 移到 `failed/`、O_NOFOLLOW 擋下競爭、資料夾外的檔案沒被讀取；`tests/unit/test_camera_sim.py`（CI 在 Linux 跑符號連結測試） |
+| 3.13 | 模擬相機只處理監看資料夾直接底下的一般圖片檔；符號連結、特殊檔案、跑出資料夾的路徑、超過大小上限（和 API 一致，10 MB）的檔案一律拒絕，且不先讀進記憶體（第 3 輪補充） | L2 | 通過 | `tools/camera_sim.py` 的 `scan()`（lstat）與 `read_regular_file()`（O_NOFOLLOW + fstat）；Linux 容器實測：符號連結與 FIFO 移到 `failed/`、O_NOFOLLOW 擋下競爭、資料夾外的檔案沒被讀取；`tests/unit/test_camera_sim.py`（CI 在 Linux 跑符號連結測試）；12 MB 檔案在讀取前被拒絕，相機容器記憶體 17.5 MiB；列出後被刪掉的檔案略過、不中止迴圈（L3） |
 | 3.14 | 自動化服務（模擬相機）用最小權限帳號，不 fallback 到 admin | L2 | 通過 | compose 移除 ADMIN_* fallback；沒設 CAMERA_* 時 camera_sim 直接結束並提示建一般使用者；實測以 role=user 的 camera 帳號送辨識成功 |

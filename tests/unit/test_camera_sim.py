@@ -35,7 +35,7 @@ def test_symlink_rejected_and_target_untouched(tmp_path: Path) -> None:
     _symlink(secret, inbox / "evil.jpg")
 
     files, rejected = scan(inbox)
-    assert files == {} and rejected == [inbox / "evil.jpg"]
+    assert files == {} and [p for p, _ in rejected] == [inbox / "evil.jpg"]
     # 兩次輪詢也不會被當成寫完的檔案送出
     sizes: dict[Path, int] = {}
     assert stable_files(inbox, sizes) == [] and stable_files(inbox, sizes) == []
@@ -57,3 +57,32 @@ def test_read_regular_file_does_not_follow_symlink(tmp_path: Path) -> None:
     with pytest.raises(NotRegularFileError):
         read_regular_file(link)
     assert read_regular_file(secret) == b"secret"
+
+
+def test_oversized_file_rejected_without_reading(tmp_path: Path) -> None:
+    (tmp_path / "big.jpg").write_bytes(b"x" * 101)
+    (tmp_path / "ok.jpg").write_bytes(b"x" * 100)
+    files, rejected = scan(tmp_path, max_bytes=100)
+    assert files == {tmp_path / "ok.jpg": 100}
+    assert [(p.name, "上限" in reason) for p, reason in rejected] == [("big.jpg", True)]
+    # 檢查之後才變大：讀取時也有上限
+    with pytest.raises(NotRegularFileError, match="上限"):
+        read_regular_file(tmp_path / "big.jpg", max_bytes=100)
+    assert read_regular_file(tmp_path / "ok.jpg", max_bytes=100) == b"x" * 100
+
+
+def test_scan_skips_files_removed_between_listing_and_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "gone.jpg").write_bytes(b"x")
+    (tmp_path / "ok.jpg").write_bytes(b"x")
+    real_lstat = os.lstat
+
+    def flaky_lstat(p: os.PathLike[str] | str) -> os.stat_result:
+        if Path(p).name == "gone.jpg":
+            raise FileNotFoundError(p)
+        return real_lstat(p)
+
+    monkeypatch.setattr("tools.camera_sim.os.lstat", flaky_lstat)
+    files, rejected = scan(tmp_path)
+    assert list(files) == [tmp_path / "ok.jpg"] and rejected == []

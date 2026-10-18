@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import os
 import shutil
@@ -29,28 +30,40 @@ import httpx
 
 log = logging.getLogger("camera_sim")
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+# 和 API 的單張上限一致（MAX_UPLOAD_BYTES 預設 10 MB）：超過的檔案送了也會被 API 拒絕，
+# 在相機端就擋下，避免有人丟一個超大檔案讓長時間執行的相機吃光記憶體
+MAX_BYTES = int(os.environ.get("CAMERA_MAX_BYTES", 10 * 1024 * 1024))
 
 
 class NotRegularFileError(Exception):
-    """不是監看資料夾直接底下的一般檔案（符號連結、特殊檔案、路徑跑出資料夾）。"""
+    """不能處理的檔案：符號連結、特殊檔案、路徑跑出資料夾、超過大小上限。"""
 
 
-def read_regular_file(path: Path) -> bytes:
-    """讀檔，但不跟隨符號連結。
+def read_regular_file(path: Path, max_bytes: int = MAX_BYTES) -> bytes:
+    """讀檔，但不跟隨符號連結，也不讀超過 max_bytes 的內容。
 
     O_NOFOLLOW（Linux / macOS）讓 open 遇到符號連結直接失敗，避免「檢查時是一般檔案、
     開啟前被換成連結」的競爭；開啟後再用 fstat 確認是一般檔案。Windows 沒有 O_NOFOLLOW，
-    靠 scan() 的 lstat 檢查。
+    靠 scan() 的 lstat 檢查。大小在開檔後用 fstat 檢查，讀取時最多讀 max_bytes + 1，
+    檢查之後檔案才變大也不會整個讀進記憶體。
     """
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
         fd = os.open(path, flags)
+    except FileNotFoundError:
+        raise  # 輪詢之間被移走或刪掉：不是錯誤，呼叫端略過
     except OSError as exc:
         raise NotRegularFileError(f"無法以不跟隨連結的方式開啟：{exc}") from exc
     with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
             raise NotRegularFileError("不是一般檔案")
-        return f.read()
+        if st.st_size > max_bytes:
+            raise NotRegularFileError(f"檔案超過 {max_bytes} bytes 上限")
+        data = f.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise NotRegularFileError(f"檔案超過 {max_bytes} bytes 上限")
+    return data
 
 
 class Camera:
@@ -84,25 +97,41 @@ class Camera:
         return r
 
 
-def scan(folder: Path) -> tuple[dict[Path, int], list[Path]]:
-    """列出資料夾直接底下的圖片：回傳（一般檔案 -> 大小、要拒絕的項目）。
+def scan(
+    folder: Path, max_bytes: int = MAX_BYTES
+) -> tuple[dict[Path, int], list[tuple[Path, str]]]:
+    """列出資料夾直接底下的圖片：回傳（一般檔案 -> 大小、要拒絕的項目與原因）。
 
     用 lstat（不跟隨連結）判斷；子資料夾（processed/、failed/）與非圖片副檔名直接略過。
+    列出之後才被刪掉或改名的項目直接略過，下次輪詢再看，不讓相機中止。
     """
     root = folder.resolve()
     files: dict[Path, int] = {}
-    rejected: list[Path] = []
+    rejected: list[tuple[Path, str]] = []
     for p in folder.iterdir():
         if p.suffix.lower() not in EXTS:
             continue
-        st = os.lstat(p)
-        if stat.S_ISDIR(st.st_mode):
+        try:
+            st = os.lstat(p)
+            if stat.S_ISDIR(st.st_mode):
+                continue
+            if not stat.S_ISREG(st.st_mode) or p.resolve().parent != root:
+                rejected.append((p, "不是一般檔案（符號連結或特殊檔案），不處理"))
+                continue
+        except FileNotFoundError:
             continue
-        if not stat.S_ISREG(st.st_mode) or p.resolve().parent != root:
-            rejected.append(p)  # 符號連結、FIFO、裝置檔等
+        if st.st_size > max_bytes:
+            rejected.append((p, f"檔案超過 {max_bytes} bytes 上限"))
             continue
         files[p] = st.st_size
     return files, rejected
+
+
+def _mtime(p: Path) -> float:
+    try:
+        return os.lstat(p).st_mtime
+    except FileNotFoundError:
+        return 0.0
 
 
 def stable_files(folder: Path, sizes: dict[Path, int]) -> list[Path]:
@@ -114,7 +143,7 @@ def stable_files(folder: Path, sizes: dict[Path, int]) -> list[Path]:
             ready.append(p)
     sizes.clear()
     sizes.update({p: s for p, s in current.items() if p not in ready})
-    return sorted(ready, key=lambda p: os.lstat(p).st_mtime)
+    return sorted(ready, key=_mtime)
 
 
 def move(path: Path, dest: Path) -> Path:
@@ -139,13 +168,17 @@ def run(cam: Camera, folder: Path, interval: float, once: bool = False) -> None:
     sizes: dict[Path, int] = {}
     log.info("監看 %s，每 %.1f 秒檢查一次，送到 /recognitions/%s", folder, interval, cam.kind)
     while True:
-        for path in scan(folder)[1]:
-            reject(path, failed, "不是一般檔案（符號連結或特殊檔案），不處理")
+        for path, reason in scan(folder)[1]:
+            with contextlib.suppress(FileNotFoundError):
+                reject(path, failed, reason)
         for path in stable_files(folder, sizes):
             try:
                 r = cam.send(path)
+            except FileNotFoundError:
+                continue  # 送出前被移走：略過
             except NotRegularFileError as exc:
-                reject(path, failed, str(exc))
+                with contextlib.suppress(FileNotFoundError):
+                    reject(path, failed, str(exc))
                 continue
             except httpx.HTTPError as exc:
                 log.warning("送出 %s 失敗（%s），下次再試", path.name, exc)
