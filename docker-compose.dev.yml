@@ -1,0 +1,17 @@
+# 本機開發用：讓 host 上的 pytest、CLI、uvicorn 連得到容器裡的 db / redis（只綁 127.0.0.1）。
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis
+# 正式部署（docker compose up）不載入這個檔案，db / redis 不對 host 開埠。
+# backend 是 internal 網路，無法對外發布埠，所以另外接一個 dev 網路。
+
+services:
+  db:
+    networks: [backend, dev]
+    ports:
+      - "127.0.0.1:5432:5432"
+  redis:
+    networks: [backend, dev]
+    ports:
+      - "127.0.0.1:6379:6379"
+
+networks:
+  dev: {}

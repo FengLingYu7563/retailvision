@@ -27,7 +27,10 @@ flowchart LR
     A & W --> S[[storage volume<br/>原圖與標註圖]]
 ```
 
-- 對外只開 nginx 一個埠；API、資料庫、Redis 不直接對外（資料庫和 Redis 只綁 127.0.0.1，方便本機除錯）。
+- 對外只開 nginx 一個埠，其他服務都不對 host 開埠。兩個 docker 網路：backend（internal，不能連外網：db、redis、api、worker、nginx）
+  與 frontend（nginx、dashboard、camera）。儀表板與模擬相機連不到 API，只能經過 nginx。
+- API 只信任 nginx 固定 IP 帶來的 `X-Forwarded-For`（uvicorn `--forwarded-allow-ips`），nginx 再用實際連線 IP 覆寫這個 header，
+  偽造的 header 繞不過依 IP 的限流（實測：經 nginx、或從內部網路直連 API，每次換 header 都在第 61 次被擋）。
 - API 和 worker 用同一個映像檔（`docker/Dockerfile.api`，不含 PyTorch，822 MB），推論只用 ONNX Runtime。
 - 使用中的模型版本以資料庫為準：切換後 API 和 worker 的下一個請求就改用新模型，不需重啟。
 
@@ -44,14 +47,20 @@ flowchart LR
 | `gap_classifier.joblib` / `.json` | 缺貨空位分類器 | `training.fit_gap_classifier` |
 
 ```bash
-cp .env.example .env      # 修改 JWT_SECRET、POSTGRES_PASSWORD、ADMIN_PASSWORD
+cp .env.example .env
+# 填入 POSTGRES_PASSWORD、JWT_SECRET、ADMIN_PASSWORD（範例檔刻意留空，沒填 compose 會直接報錯）
+# 產生隨機值：python -c "import secrets; print(secrets.token_urlsafe(32))"
 docker compose up -d --build
 curl http://localhost:8080/healthz
 ```
 
+範例值（`replace-with...`、`change-me...`）會被拒絕：JWT_SECRET 用範例值時 API 無法啟動，admin 密碼用範例值時不會建立帳號。
+
 API 容器啟動時會自動執行 `alembic upgrade head`、登錄 `models/` 裡的模型版本，並依 `.env` 的
 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 建立 admin（已存在就略過，不會覆寫密碼）。
-沒有放模型檔時服務仍會啟動，`/healthz` 回 503 並指出缺哪個模型。
+沒有放模型檔時服務仍會全部啟動，`/healthz` 回 503 並指出缺哪個模型（實測）。
+容器的 healthcheck 用 `/livez`（process 活著就好），`/healthz` 是 readiness，兩者分開，
+否則沒有權重時 API 會被標成 unhealthy，依賴它的 nginx 也起不來。
 
 - 儀表板：http://localhost:8080/
 - OpenAPI 文件：http://localhost:8080/docs
@@ -248,8 +257,9 @@ FastAPI + PostgreSQL 16 + Redis + Celery。基底路徑 `/api/v1`，OpenAPI 文�
 ### 不用 docker 的本機開發
 
 ```bash
-cp .env.example .env            # 修改密碼與 JWT_SECRET
-docker compose up -d db redis
+cp .env.example .env            # 填密碼與 JWT_SECRET，DATABASE_URL 換成同一個密碼
+# docker-compose.dev.yml 讓 db / redis 綁到 127.0.0.1（正式部署不載入）
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis
 alembic upgrade head
 python -m app.cli seed-models
 python -m app.cli create-user admin --role admin
@@ -298,6 +308,9 @@ pytest
   - 訓練用固定 seed 抽樣的 3,000 張子集，評估用完整官方測試集 2,936 張。
 
 ## 已知限制
+
+- 儀表板經過 nginx 呼叫 API，對 API 來說所有儀表板使用者的連線 IP 都是儀表板容器；
+  登入端點依 IP 限流，所以同時很多人從儀表板登入失敗時會共用同一份額度（登入後的請求依帳號限流，不受影響）。
 
 - 以圖搜圖對訓練時沒看過的新商品，第一名準確率約 47.0%（前 5 名約 92.7%），應該回傳前 k 名讓人確認。
 - 缺貨空位判斷依賴偵測結果：偵測器表現差的畫面（例如吊掛式小包裝、透視角度很大的棧板堆疊），分層和空位都會不準；表面平滑、沒有圖案的包裝也可能被誤判成空位。

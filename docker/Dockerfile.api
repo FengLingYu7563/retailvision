@@ -38,7 +38,8 @@ COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 # 不用 root 執行：容器被攻破時能做的事比較少
 USER app
 EXPOSE 8000
+# 用 /livez（liveness）而不是 /healthz：沒放權重時 /healthz 回 503 是正常的降級狀態
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)" || exit 1
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=4).status == 200 else 1)" || exit 1
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["api"]

@@ -61,7 +61,7 @@
 
 | # | 狀態 | 證據 |
 |---|---|---|
-| 3.1 | 通過 | `cp .env.example .env` 填密碼後 `docker compose up -d --build`：API 啟動時自動 migrate、登錄模型、建立 admin；經 nginx 的 `/healthz` 回 200。API 8000 埠沒有對外開放 |
+| 3.1 | 通過 | `cp .env.example .env`、填入三個密鑰後 `docker compose up -d --build`：API 啟動時自動 migrate、登錄模型、建立 admin；經 nginx 的 `/healthz` 回 200。只有 nginx 對 host 開埠 |
 | 3.2 | 通過 | `retailvision/api` 822 MB；`pip list` 不含 torch、torchvision、ultralytics、timm（CI 的 docker job 也會檢查） |
 | 3.3 | 待確認 | `.github/workflows/ci.yml`：lint、test（PostgreSQL / Redis service container、覆蓋率 >= 80%）、docker；push 後看 CI 結果 |
 | 3.4 | 通過 | `docker compose --profile camera up -d camera`，丟 5 張圖，最慢 2.55 秒出現在 `/recognitions`，檔案全部移到 `processed/` |
@@ -72,3 +72,14 @@
 
 補充：docker 環境的 API 延遲（經 nginx）單品 p95 139.2 ms、貨架 p95 504.7 ms，仍在 2.12 的門檻內
 （`models/metrics.json` 的 `api_latency_docker`）；docker 環境的批次辨識（2.8）由 prefork worker 處理，約 4.8 秒完成。
+
+## Codex 審查補充的檢查項目（第 1 輪 criteria_gaps）
+
+| # | 項目 | 等級 | 狀態 | 證據 |
+|---|---|---|---|---|
+| 3.9 | 正式部署（`docker compose up`）中 db、redis 不對 host 開埠；本機開發另外疊加 `docker-compose.dev.yml` | L2 | 通過 | `docker compose ps` 只有 nginx 有埠；127.0.0.1:5432 / 6379 連不上；backend 是 internal 網路 |
+| 3.10 | `.env.example` 不含可用的密鑰或 admin 密碼；範例值會被拒絕 | L2 | 通過 | 三個密鑰留空，compose 報「請在 .env 設定 JWT_SECRET」；`Settings` 拒絕 `replace-with...` / `change-me...`；`create_user` 拒絕範例密碼（測試） |
+| 3.11 | X-Forwarded-For 只信任 nginx；非 nginx 來源偽造的 header 繞不過 IP 限流 | L2 | 通過 | uvicorn `--forwarded-allow-ips 172.30.57.10`（nginx 固定 IP）；儀表板 / 相機只在 frontend 網路、連不到 api；經 nginx 與從內部直連 api、每次換 XFF，都在第 61 次回 429 |
+| 3.12 | 沒放權重時所有服務仍會啟動，`/healthz` 回 503（liveness 與 readiness 分開） | L1 | 通過 | healthcheck 改用 `/livez`；空的模型資料夾實測：所有容器起來、api healthy、經 nginx 的 `/healthz` 回 503 並列出缺少的模型 |
+
+3.1 的步驟因此多了「填入三個密鑰」：照抄範例檔就能啟動，等於所有部署共用公開的 JWT 金鑰與 admin 密碼（Codex L2）。

@@ -2,6 +2,7 @@
 
 JWT_SECRET、DATABASE_URL 沒有預設值：少設的時候啟動就失敗，
 比默默用一個寫死在程式裡的 secret 安全（驗收 2.5）。
+文件裡出現過的範例值（replace-with...、change-me...）也拒絕，避免照抄範例就上線。
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,21 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 60
     celery_eager: bool = False
     onnx_threads: int | None = None
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _reject_placeholder_secret(cls, v: str) -> str:
+        if is_placeholder(v):
+            raise ValueError("JWT_SECRET 不可以用範例值，請產生隨機字串")
+        return v
+
+
+PLACEHOLDER_PREFIXES = ("replace-with", "change-me", "changeme")
+
+
+def is_placeholder(value: str) -> bool:
+    """文件或範例檔裡的佔位值：拿來當密碼或金鑰等於公開。"""
+    return value.strip().lower().startswith(PLACEHOLDER_PREFIXES)
 
 
 @lru_cache

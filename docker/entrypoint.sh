@@ -10,11 +10,12 @@ case "$1" in
     python -m app.cli seed-models
     python -m app.cli bootstrap-admin
     # --proxy-headers：API 在 nginx 後面，rate limit 要用 X-Forwarded-For 的真實 client IP。
-    # forwarded-allow-ips 設 *：API 不對外開放埠，只有 nginx 連得到，才能信任這個 header。
+    # 只信任 nginx 的固定 IP（FORWARDED_ALLOW_IPS，docker-compose.yml 設定）；
+    # 其他來源帶的 X-Forwarded-For 一律忽略。沒設定時用 uvicorn 的預設（只信任 127.0.0.1）。
     # --log-config：uvicorn 自己的 log 也輸出成 JSON；--no-access-log：存取紀錄由 app 的
     # request_id middleware 輸出（含 request_id 與耗時），不要 uvicorn 再印一份純文字的
     exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 \
-      --proxy-headers --forwarded-allow-ips '*' --no-server-header \
+      --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}" --no-server-header \
       --log-config /srv/uvicorn-log.json --no-access-log
     ;;
   worker)

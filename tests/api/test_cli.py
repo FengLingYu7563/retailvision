@@ -50,6 +50,10 @@ def test_bootstrap_admin(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError):  # 不符合規則：失敗，不默默略過
         bootstrap_admin(db)
 
+    monkeypatch.setenv("ADMIN_PASSWORD", "change-me-admin-password")
+    with pytest.raises(ValueError, match="範例值"):  # 舊版範例檔的密碼
+        bootstrap_admin(db)
+
     monkeypatch.setenv("ADMIN_PASSWORD", "first-password-123")
     assert "已建立" in bootstrap_admin(db)
     user = db.scalars(select(User).where(User.username == "ops")).one()

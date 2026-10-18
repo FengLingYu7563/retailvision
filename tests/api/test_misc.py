@@ -115,6 +115,13 @@ def test_healthz_503_when_model_missing(client: TestClient) -> None:
     assert_error(r, 503, "SERVICE_UNAVAILABLE")
     details = r.json()["error"]["details"]
     assert details["status"] == "degraded" and details["models"]["detector"] is None
+    # liveness 不受影響：docker healthcheck 用 /livez，模型缺少時容器仍是 healthy，nginx 才起得來
+    assert client.get("/livez").status_code == 200
+    registry.detector = None
+    try:
+        assert client.get("/livez").json() == {"status": "alive"}
+    finally:
+        registry.detector = saved
 
 
 def test_request_id_propagated_and_sanitized(client: TestClient) -> None:
@@ -224,10 +231,12 @@ def test_no_string_built_sql() -> None:
     assert offenders == []
 
 
+# ci-only-password：CI 的 service container 專用、只在 runner 內有效（.github/workflows/ci.yml）
 SECRET_PATTERNS = [
     re.compile(r"JWT_SECRET\s*=\s*(?!replace-with)[A-Za-z0-9_\-]{20,}"),
-    re.compile(r"POSTGRES_PASSWORD\s*=\s*(?!change-me)\S{8,}"),
-    re.compile(r"postgresql\+psycopg://[^:\s]+:(?!change-me@)[^@\s]{8,}@"),
+    re.compile(r"POSTGRES_PASSWORD\s*[=:]\s*(?!change-me|ci-only-password)\S{8,}"),
+    re.compile(r"postgresql\+psycopg://[^:\s]+:(?!change-me@|ci-only-password@)[^@\s]{8,}@"),
+    re.compile(r"ADMIN_PASSWORD\s*=\s*\S{8,}"),
 ]
 
 
@@ -257,3 +266,10 @@ def test_jwt_secret_required() -> None:
 
     with pytest.raises(ValidationError):
         Settings(database_url="postgresql+psycopg://x/y", _env_file=None, jwt_secret="short")  # type: ignore[call-arg]
+    # 文件裡的範例值即使夠長也拒絕
+    with pytest.raises(ValidationError, match="範例值"):
+        Settings(  # type: ignore[call-arg]
+            database_url="postgresql+psycopg://x/y",
+            _env_file=None,
+            jwt_secret="replace-with-a-long-random-string-at-least-32-chars",
+        )

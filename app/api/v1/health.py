@@ -11,6 +11,16 @@ from app.schemas import ErrorResponse, HealthOut
 router = APIRouter(tags=["health"])
 
 
+@router.get("/livez")
+def livez() -> dict[str, str]:
+    """Liveness：process 活著就回 200，不檢查資料庫與模型。
+
+    給 docker healthcheck 用。/healthz 是 readiness：沒放權重時回 503 是正確的降級狀態，
+    如果 healthcheck 也用它，容器會被標成 unhealthy，依賴它的 nginx 就起不來。
+    """
+    return {"status": "alive"}
+
+
 @router.get("/healthz", response_model=HealthOut, responses={503: {"model": ErrorResponse}})
 def healthz(request: Request, db: DB) -> HealthOut:
     """不需登入。資料庫、Redis、模型任何一個不可用就回 503。

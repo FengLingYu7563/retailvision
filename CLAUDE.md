@@ -50,10 +50,11 @@
 
 ## Last Progress
 
-**Phase 1、2 完成；Phase 3 實作完成，等 CI 結果與 Codex 審查**。狀態表在 `docs/ACCEPTANCE_PHASE{1,2,3}.md`。
+**Phase 1、2 完成；Phase 3 實作完成，Codex 第 1 輪 FAIL（4 項）已修，待 CI 與第 2 輪審查**。狀態表在 `docs/ACCEPTANCE_PHASE{1,2,3}.md`。
 
 - 公開 repo：https://github.com/FengLingYu7563/retailvision（2026-10-18 建立並 push）。
 - docker compose：db、redis、api、worker（同一映像檔）、dashboard、nginx（唯一對外，8080），camera 在 profile camera。
+  本機 pytest / CLI 要連 db：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis`（正式部署 db / redis 不開埠）。
   API 啟動時自動 migrate、seed-models、bootstrap-admin（讀 `.env` 的 ADMIN_*）。
 - 映像檔套件版本鎖在 `docker/constraints.txt`（scikit-learn 1.9.1 要和 joblib 模型一致）。
 - 3.1、3.2、3.4 到 3.8 實測通過；docker 延遲單品 p95 139 ms、貨架 505 ms（`api_latency_docker`）。

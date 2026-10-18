@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import get_settings, is_placeholder
 from app.core.security import hash_password
 from app.db.models import ModelVersion, User
 from app.db.session import session_factory
@@ -33,6 +33,8 @@ def create_user(db: Session, username: str, password: str, role: str) -> User:
         raise ValueError("role 只能是 admin 或 user")
     if len(password) < MIN_PASSWORD:
         raise ValueError(f"密碼至少 {MIN_PASSWORD} 個字元")
+    if is_placeholder(password):
+        raise ValueError("密碼不可以用範例值")
     if db.scalar(select(User.id).where(User.username == username)):
         raise ValueError(f"帳號 {username} 已存在")
     user = User(username=username, password_hash=hash_password(password), role=role)

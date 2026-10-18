@@ -1,10 +1,13 @@
 # RetailVision 全部服務（驗收 3.1）：
-#   cp .env.example .env    # 修改密碼與 JWT_SECRET
+#   cp .env.example .env    # 填入 POSTGRES_PASSWORD、JWT_SECRET、ADMIN_PASSWORD（範例檔刻意留空）
 #   docker compose up -d --build
 #   開啟 http://localhost:8080（儀表板）、http://localhost:8080/docs（API 文件）
 #
-# 對外只開 nginx（Phase 3 調整第 8 點）。db / redis 綁在 127.0.0.1，只給本機開發與測試用，
-# 不對區網開放；api / worker / dashboard 完全不對外開埠。
+# 對外只開 nginx（Phase 3 調整第 8 點），其他服務都不對 host 開埠。兩個網路：
+#   backend（internal，不能連外網）：db、redis、api、worker、nginx
+#   frontend：nginx、dashboard、camera
+# dashboard 與 camera 連不到 api，只能經過 nginx；api 只信任 nginx 固定 IP 帶來的 X-Forwarded-For。
+# 本機開發要從 host 連 db / redis（跑 pytest、CLI）時另外疊加 docker-compose.dev.yml。
 # 權重檔不在 git 裡：models/ 底下要先放好 .onnx（訓練產出），沒放時 /healthz 會回 503 並指出缺哪個模型。
 
 x-app-env: &app-env
@@ -23,8 +26,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-retail}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請在 .env 設定 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-retailvision}
-    ports:
-      - "127.0.0.1:5432:5432"
+    networks: [backend]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -35,8 +37,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "127.0.0.1:6379:6379"
+    networks: [backend]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -53,8 +54,10 @@ services:
       <<: *app-env
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      FORWARDED_ALLOW_IPS: ${NGINX_BACKEND_IP:-172.30.57.10}
+    networks: [backend]
     volumes:
-      - ./models:/srv/models:ro
+      - ${MODELS_HOST_DIR:-./models}:/srv/models:ro
       - storage:/data/storage
     depends_on:
       db: {condition: service_healthy}
@@ -71,8 +74,9 @@ services:
     environment:
       <<: *app-env
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    networks: [backend]
     volumes:
-      - ./models:/srv/models:ro
+      - ${MODELS_HOST_DIR:-./models}:/srv/models:ro
       - storage:/data/storage
     depends_on:
       api: {condition: service_healthy}
@@ -90,9 +94,9 @@ services:
       dockerfile: docker/Dockerfile.dashboard
     image: retailvision/dashboard:latest
     environment:
-      API_BASE: http://api:8000
-    depends_on:
-      api: {condition: service_healthy}
+      # 經過 nginx，不直接連 api（api 不在 frontend 網路上）
+      API_BASE: http://nginx
+    networks: [frontend]
     restart: unless-stopped
 
   nginx:
@@ -101,6 +105,11 @@ services:
       - "${HTTP_PORT:-8080}:80"
     volumes:
       - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      frontend: {}
+      backend:
+        # 固定 IP：api 只信任這個位址帶來的 X-Forwarded-For
+        ipv4_address: ${NGINX_BACKEND_IP:-172.30.57.10}
     depends_on:
       api: {condition: service_healthy}
       dashboard: {condition: service_started}
@@ -113,16 +122,25 @@ services:
     image: retailvision/dashboard:latest
     command: ["python", "-m", "tools.camera_sim", "--watch", "/srv/camera_inbox"]
     environment:
-      API_BASE: http://api:8000
+      API_BASE: http://nginx
       CAMERA_TYPE: ${CAMERA_TYPE:-product}
       CAMERA_USERNAME: ${CAMERA_USERNAME:-${ADMIN_USERNAME:-}}
       CAMERA_PASSWORD: ${CAMERA_PASSWORD:-${ADMIN_PASSWORD:-}}
     volumes:
       - ./tools:/srv/tools:ro
       - ./camera_inbox:/srv/camera_inbox
+    networks: [frontend]
     depends_on:
-      api: {condition: service_healthy}
+      nginx: {condition: service_started}
     restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.30.57.0/24}
+  frontend: {}
 
 volumes:
   pgdata:
