@@ -69,6 +69,8 @@ API 容器啟動時會自動執行 `alembic upgrade head`、登錄 `models/` 裡
   再 `docker compose --profile camera up -d camera`，把圖片放進 `camera_inbox/`，
   約 1 到 3 秒後出現在歷史紀錄，檔案移到 `camera_inbox/processed/`（失敗的移到 `failed/` 並附錯誤訊息）。
   只處理資料夾直接底下的一般圖片檔；符號連結與特殊檔案會被移到 `failed/`，不會讀取它指向的內容。
+  Linux 上相機容器用 `.env` 的 `CAMERA_UID` / `CAMERA_GID`（預設 1000）執行，要和 `camera_inbox/` 的擁有者一致（`id -u`、`id -g`），
+  否則啟動時會直接結束並說明。
 
 ### curl 範例
 

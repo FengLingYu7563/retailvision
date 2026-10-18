@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from tools.camera_sim import NotRegularFileError, read_regular_file, reject, scan, stable_files
+from tools.camera_sim import (
+    NotRegularFileError,
+    prepare,
+    read_regular_file,
+    reject,
+    scan,
+    stable_files,
+)
 
 
 def _symlink(target: Path, link: Path) -> None:
@@ -86,3 +93,23 @@ def test_scan_skips_files_removed_between_listing_and_stat(
     monkeypatch.setattr("tools.camera_sim.os.lstat", flaky_lstat)
     files, rejected = scan(tmp_path)
     assert list(files) == [tmp_path / "ok.jpg"] and rejected == []
+
+
+def test_prepare_creates_subfolders(tmp_path: Path) -> None:
+    prepare(tmp_path / "inbox")
+    assert (tmp_path / "inbox" / "processed").is_dir() and (tmp_path / "inbox" / "failed").is_dir()
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "getuid") or os.getuid() == 0, reason="需要 POSIX 權限且不是 root"
+)
+def test_prepare_reports_unwritable_folder(tmp_path: Path) -> None:
+    """乾淨的 Linux clone：資料夾不屬於容器使用者時，啟動就說明原因，不要跑到一半才失敗。"""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    inbox.chmod(0o555)
+    try:
+        with pytest.raises(PermissionError):
+            prepare(inbox)
+    finally:
+        inbox.chmod(0o755)

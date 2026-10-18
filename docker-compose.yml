@@ -122,6 +122,9 @@ services:
     profiles: ["camera"]
     image: retailvision/dashboard:latest
     command: ["python", "-m", "tools.camera_sim", "--watch", "/srv/camera_inbox"]
+    # 用 host 使用者的 uid / gid 執行（Linux 上 id -u / id -g，多數是 1000）：
+    # 監看資料夾是 bind mount，容器用映像檔預設的 uid 10001 會沒有權限建 processed/、failed/ 與移動檔案
+    user: "${CAMERA_UID:-1000}:${CAMERA_GID:-1000}"
     environment:
       API_BASE: http://nginx
       CAMERA_TYPE: ${CAMERA_TYPE:-product}
@@ -131,7 +134,13 @@ services:
       CAMERA_PASSWORD: ${CAMERA_PASSWORD:-}
     volumes:
       - ./tools:/srv/tools:ro
-      - ./camera_inbox:/srv/camera_inbox
+      # create_host_path: false：Linux 的 Docker Engine 上，資料夾不存在時直接報錯，不自動建一個
+      # root 擁有、容器寫不進去的資料夾（repo 有 camera_inbox/.gitkeep，clone 下來就存在）。
+      # Docker Desktop（Windows）實測會忽略這個設定，但那邊權限不是問題
+      - type: bind
+        source: ./camera_inbox
+        target: /srv/camera_inbox
+        bind: {create_host_path: false}
     networks: [frontend]
     depends_on:
       nginx: {condition: service_started}

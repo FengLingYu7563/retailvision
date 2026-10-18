@@ -90,3 +90,10 @@
 |---|---|---|---|---|
 | 3.13 | 模擬相機只處理監看資料夾直接底下的一般圖片檔；符號連結、特殊檔案、跑出資料夾的路徑、超過大小上限（和 API 一致，10 MB）的檔案一律拒絕，且不先讀進記憶體（第 3 輪補充） | L2 | 通過 | `tools/camera_sim.py` 的 `scan()`（lstat）與 `read_regular_file()`（O_NOFOLLOW + fstat）；Linux 容器實測：符號連結與 FIFO 移到 `failed/`、O_NOFOLLOW 擋下競爭、資料夾外的檔案沒被讀取；`tests/unit/test_camera_sim.py`（CI 在 Linux 跑符號連結測試）；12 MB 檔案在讀取前被拒絕，相機容器記憶體 17.5 MiB；列出後被刪掉的檔案略過、不中止迴圈（L3） |
 | 3.14 | 自動化服務（模擬相機）用最小權限帳號，不 fallback 到 admin | L2 | 通過 | compose 移除 ADMIN_* fallback；沒設 CAMERA_* 時 camera_sim 直接結束並提示建一般使用者；實測以 role=user 的 camera 帳號送辨識成功 |
+
+## Codex 審查補充的檢查項目（第 4 輪 criteria_gaps）
+
+| # | 項目 | 等級 | 狀態 | 證據 |
+|---|---|---|---|---|
+| 3.15 | 經 nginx 的對外行為也要驗證：nginx 自己產生的錯誤（413、上游無法連線）維持統一 JSON 錯誤格式與 request_id | L1 | 通過 | `docker/nginx.conf` 的 `error_page`；實測 13 MB 上傳回 413 JSON（`FILE_TOO_LARGE`，body 與 `X-Request-ID` header 的 request_id 一致）；停掉 api 時 `/api/v1/healthz` 回 503 JSON（`SERVICE_UNAVAILABLE`） |
+| 3.16 | 相機在 Linux 的乾淨 clone 上以非 root 使用者執行時，監看資料夾與 processed/、failed/ 可寫入；不行時啟動就說明原因 | L1 | 通過 | repo 附 `camera_inbox/.gitkeep`；camera 用 `CAMERA_UID` / `CAMERA_GID`（預設 1000）執行；bind mount `create_host_path: false`；`prepare()` 啟動時實際試寫。Linux 檔案系統（named volume）實測：root 擁有的資料夾 + uid 10001 時啟動即結束並說明要設 CAMERA_UID，資料夾屬於 1000 時正常 |

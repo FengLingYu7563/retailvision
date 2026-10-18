@@ -23,6 +23,7 @@ import os
 import shutil
 import stat
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -162,9 +163,25 @@ def reject(path: Path, failed: Path, reason: str) -> None:
     target.with_name(target.name + ".error.txt").write_text(reason + "\n", encoding="utf-8")
 
 
+def prepare(folder: Path) -> None:
+    """建立監看資料夾與 processed/、failed/，並確認可以寫入；不行就丟出說明清楚的錯誤。"""
+    try:
+        for d in (folder, folder / "processed", folder / "failed"):
+            d.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise PermissionError(f"無法在 {folder} 建立資料夾：{exc}") from exc
+    # 實際試寫，不用 os.access：Docker Desktop（Windows / macOS）的 bind mount 權限位元
+    # 和實際能不能寫不一致，os.access 會誤判
+    for d in (folder, folder / "processed", folder / "failed"):
+        try:
+            with tempfile.NamedTemporaryFile(dir=d, prefix=".write-test-"):
+                pass
+        except OSError as exc:
+            raise PermissionError(f"{d} 沒有寫入權限：{exc}") from exc
+
+
 def run(cam: Camera, folder: Path, interval: float, once: bool = False) -> None:
     processed, failed = folder / "processed", folder / "failed"
-    folder.mkdir(parents=True, exist_ok=True)
     sizes: dict[Path, int] = {}
     log.info("監看 %s，每 %.1f 秒檢查一次，送到 /recognitions/%s", folder, interval, cam.kind)
     while True:
@@ -215,6 +232,16 @@ def main() -> int:
     if not username or not password:
         print(
             "請設定 CAMERA_USERNAME 與 CAMERA_PASSWORD（建議另建一般使用者帳號，不要用 admin）",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        prepare(Path(args.watch))
+    except PermissionError as exc:
+        uid = os.getuid() if hasattr(os, "getuid") else "?"
+        print(
+            f"{exc}。目前 uid {uid}；docker compose 請把 .env 的 CAMERA_UID / CAMERA_GID "
+            "設成監看資料夾擁有者的 id -u / id -g",
             file=sys.stderr,
         )
         return 1

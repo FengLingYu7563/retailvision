@@ -37,5 +37,6 @@ storage/
 Thumbs.db
 .DS_Store
 
-# 模擬相機的監看資料夾（執行期資料）
-camera_inbox/
+# 模擬相機的監看資料夾（執行期資料）；資料夾本身要存在（docker-compose.yml 的 bind mount）
+camera_inbox/*
+!camera_inbox/.gitkeep
