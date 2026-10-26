@@ -5,6 +5,9 @@ SKU-110K 沒有空位標註，所以分兩步：
 2. review：人工逐張確認。**刪掉不是空位的框，並補上漏掉的空位**，
    否則召回率會被高估（只標模型找得到的空位，召回率永遠是 100%）。
    空位的定義：貨架上本來應該放商品、現在空著、看得到背板或層板的地方。
+   **框內要完全沒有商品**（第二版標註，2026-10-25 起）：寬度至少約一個商品，框裡只看得到背板或層板。
+   只少了一部分的地方（框裡還看得到商品、商品倒下或沒排整齊、一疊少了幾個但還有商品）都不框；
+   框的範圍只包住空的部分，不要延伸到旁邊的商品上。
    商品之間的正常小縫、畫面邊緣的牆或走道都不算。
    上下堆疊：同一層隔板上旁邊的商品堆兩層、只有某格上層空掉時，框上層空掉的那一塊
    （shelf.py 依框的高度分層，上下堆疊會被分成兩層，標註要和這個判斷方式一致）；
@@ -21,12 +24,20 @@ review 操作：
   q / Esc      存檔並離開
 
 結果存在 training/data/gap_annotations.json（只有檔名與座標，不含圖片，可以 commit）。
+第一版標註（定義執行不一致，部分框到還有商品的地方）保留在 gap_annotations*_v1.json。
+新的評估集要排除第一版評估集用過的圖（--exclude），那批圖的結果已經看過，不能再當評估集：
+
+  python -m training.annotate_gaps --set tune propose --n 40
+  python -m training.annotate_gaps --set eval propose --n 15
+      --exclude training/data/gap_annotations_v1.json        （接在上一行後面）
+  python -m training.annotate_gaps --set tune review
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -57,7 +68,7 @@ def save(data: dict[str, Any]) -> None:
     OUT.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def propose(n: int, scan: int, min_density: float) -> None:
+def propose(n: int, scan: int, min_density: float, exclude: frozenset[str] = frozenset()) -> None:
     """挑候選圖並預填寬鬆版的空位框。
 
     兩個刻意的設計，都是為了不讓評估被高估：
@@ -75,7 +86,7 @@ def propose(n: int, scan: int, min_density: float) -> None:
     for name in names:
         if len(data["images"]) >= n:
             break
-        if name in existing:
+        if name in existing or name in exclude:
             continue
         img = load_image(SKU / "images" / name)
         a = analyze_shelf(det.detect(img), img.shape)  # 不傳 image：不做紋理驗證
@@ -161,13 +172,24 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--n", type=int, default=15)
     p.add_argument("--scan", type=int, default=600)
     p.add_argument("--min-density", type=float, default=0.5)
+    p.add_argument(
+        "--exclude",
+        nargs="*",
+        default=[],
+        help="排除這些標註檔裡出現過的圖（例如第一版評估集）",
+    )
     sub.add_parser("review", parents=[common])
     args = ap.parse_args(argv)
     global OUT, SPLIT_FILE
     # 不用 set_defaults：parents 會讓各層共用同一個參數物件，設了預設值子指令會把上層的值蓋掉
     OUT, SPLIT_FILE = SETS[getattr(args, "set", "eval")]
     if args.cmd == "propose":
-        propose(args.n, args.scan, args.min_density)
+        exclude = frozenset(
+            item["image"]
+            for f in args.exclude
+            for item in json.loads(Path(f).read_text(encoding="utf-8"))["images"]
+        )
+        propose(args.n, args.scan, args.min_density, exclude)
     else:
         review()
 

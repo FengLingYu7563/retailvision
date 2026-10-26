@@ -80,7 +80,7 @@
 | 2.9 | 真實模型：10 類各用 3 張 train 實拍登錄，test 照片查詢，top-1 10/10、top-5 10/10 | `tests/api/test_real_models.py` | 通過 |
 | 2.10 | 從空資料庫 upgrade 到最新、downgrade 回空、再 upgrade | `test_misc.py`、指令實測 | 通過 |
 | 2.11 | 超過限制回 429 + Retry-After；壓測時實際伺服器也觸發 | `test_auth.py` | 通過 |
-| 2.12 | 單品 p95 104.7 ms、貨架 p95 454.7 ms（AMD Ryzen 7 4800H、16 邏輯 CPU、ONNX Runtime CPU、client 端端到端） | `tools/bench_latency.py` | 通過 |
+| 2.12 | 單品 p95 104.7 ms、貨架 p95 454.7 ms（AMD Ryzen 7 4800H、16 邏輯 CPU、ONNX Runtime CPU、client 端端到端）。2026-10-26 換上重新標註後的空位分類器重測：單品 132.2 ms、貨架 303.4 ms | `tools/bench_latency.py` | 通過 |
 | 調整 5 | catalog_match 門檻 0.675（Grocery val：正確率 91.5%） | `training/tune_catalog_threshold.py` | 完成 |
 | 調整 6 | decompression bomb：Pillow 內建防護與自訂 4000 萬像素上限都有測試 | `test_uploads.py` | 通過 |
 

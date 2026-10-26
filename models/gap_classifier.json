@@ -1,6 +1,6 @@
 {
   "kind": "gbt",
-  "threshold": 0.35,
+  "threshold": 0.25,
   "min_gap_factor": 0.4,
   "feature_names": [
     "brightness_ratio",
@@ -16,5 +16,5 @@
     "at_shelf_edge",
     "log_width_ratio"
   ],
-  "sha256": "b5a55d391ba0adfe16d5bcd44becc9ec8ed9be700ad0d3d1cb08a97c110fd52c"
+  "sha256": "721324aeb42ce47e489332e0ac27dc5454cd0ab4a26201a9e01758bb8be1c226"
 }

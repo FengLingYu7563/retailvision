@@ -70,7 +70,7 @@
 | 3.7 | 通過 | README：架構圖（mermaid）、快速開始、需要的模型檔、curl 範例、模型比較表、資料集出處與授權、已知限制、截圖 |
 | 3.8 | 通過 | API 與 uvicorn 日誌都是 JSON；錯誤回應的 `request_id` 與日誌一致，request_id 由 nginx 產生 |
 
-補充：docker 環境的 API 延遲（經 nginx）單品 p95 139.2 ms、貨架 p95 504.7 ms，仍在 2.12 的門檻內
+補充：docker 環境的 API 延遲（經 nginx）單品 p95 139.2 ms、貨架 p95 504.7 ms（2026-10-26 換新空位分類器後重測：165.4 ms、434.8 ms），仍在 2.12 的門檻內
 （`models/metrics.json` 的 `api_latency_docker`）；docker 環境的批次辨識（2.8）由 prefork worker 處理，約 4.8 秒完成。
 
 ## Codex 審查補充的檢查項目（第 1 輪 criteria_gaps）

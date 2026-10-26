@@ -6,7 +6,7 @@
 **Purpose**: 作品集專案。單品辨識（Grocery Store）、貨架偵測與缺貨空位（SKU-110K）、新品登錄與以圖搜圖，之後以 RESTful API + DB + 儀表板提供。
 **Main directory**: .
 **Spec**: `RetailVision_SPEC.md`（需求、架構、API、驗收標準）
-**GitHub**: not configured（尚未建 repo，未 push）
+**GitHub**: https://github.com/FengLingYu7563/retailvision（公開，2026-10-18 建立；GitHub Actions CI）
 **Obsidian vault**: not used
 **Obsidian dashboard**: not used
 
@@ -50,21 +50,27 @@
 
 ## Last Progress
 
-**Phase 1、2 完成；Phase 3 實作完成，Codex 第 1 輪 FAIL（4 項）已修，待 CI 與第 2 輪審查**。狀態表在 `docs/ACCEPTANCE_PHASE{1,2,3}.md`。
+**Phase 1、2 完成；Phase 3 實作完成（Codex 第 4 輪的 2 項 L1 已修，CI 綠燈），第 5 輪審查腳本 exit 1 未跑完。**
+**1.8 重新標註完成（第四輪，2026-10-26）**：定義嚴格執行「框內完全沒有商品」，從頭標、評估集另抽 15 張新圖。
+調參集 40 張 145 個空位，CV 召回 71.0% / 精確 32.7%（門檻 0.25）；新評估集 15 張 55 個空位，
+只跑一次：v2 召回 60.0% / 精確 30.0%（v1 41.8% / 42.6%），**仍未達標（L3）**，已記錄。
 
-- 公開 repo：https://github.com/FengLingYu7563/retailvision（2026-10-18 建立並 push）。
-- docker compose：db、redis、api、worker（同一映像檔）、dashboard、nginx（唯一對外，8080），camera 在 profile camera。
-  本機 pytest / CLI 要連 db：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis`（正式部署 db / redis 不開埠）。
-  API 啟動時自動 migrate、seed-models、bootstrap-admin（讀 `.env` 的 ADMIN_*）。
-- 映像檔套件版本鎖在 `docker/constraints.txt`（scikit-learn 1.9.1 要和 joblib 模型一致）。
-- 3.1、3.2、3.4 到 3.8 實測通過；docker 延遲單品 p95 139 ms、貨架 505 ms（`api_latency_docker`）。
+- 新空位分類器已上線（docker api / worker 已載入）；舊模型備份 `models/gap_classifier_v1-labels.*`（不 commit）；舊標註 `training/data/gap_annotations*_v1.json`。
+- README 範例圖換成新模型的 `test_1016.jpg`（召回 60%、精確 30%，和整體平均相同），另加預測與人工標註對照圖 `docs/screenshots/gaps_eval_example.jpg`。
+- 延遲重測：模型 p95 165 ms；本機 API 單品 132.2 / 貨架 303.4 ms；docker 165.4 / 434.8 ms（都在門檻內）。
+- 本機完整 pytest 通過（145 個，3 個 Windows 不能跑的 skip）；ruff、mypy 通過。**以上改動都還沒 commit。**
+- 環境狀況：Docker Desktop 曾因殘留 socket 起不來，已把 `%LOCALAPPDATA%/Docker/run` 改名成 `run.stale-20261026` 解決
+  （裡面只有那個 0 byte socket，可在重開機後刪）。Windows WMI 會間歇卡住，卡住時 `import sqlalchemy`、`tasklist`、
+  `taskkill` 都會停住，重開機可解。收工時容器已 stop（volume 保留）。
+- 公開 repo：https://github.com/FengLingYu7563/retailvision 。本機 pytest / CLI 要連 db：
+  `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis`。
 
 ## Todos
 
-1. 確認 GitHub Actions CI 綠燈（3.3），失敗就修。
-2. Phase 3 送 Codex 審查，L1 / L2 FAIL 必修，迭代到 PASS。
+1. 使用者同意後 commit + push 第四輪標註、文件與新截圖（排除 `models/gap_classifier_v1-labels.json`），確認 CI。
+2. 重跑 Phase 3 Codex 第 5 輪（先查 codex-verify 腳本為何 exit 1），L1 / L2 修到 PASS。
 3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
-4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註。
+4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註；再改方法要另標全新評估集。
 
 ## Important Decisions
 
@@ -76,6 +82,8 @@
   判斷原則是「正面看過去那個位置有沒有商品」：上下堆疊、上層空掉要框；前排有、後排空（往前推）不框，
   那是庫存偏低，正面照片看不到深度（列為延伸方向）。
 - SKU-110K 下載用 HTTPS 並驗證釘選的 SHA-256（trust on first use）。
+- 1.8 第四輪（2026-10-26）：第一版標註有部分框到還有商品的地方，改為嚴格執行「框內完全沒有商品、至少約一個商品寬」，
+  從頭重標調參集 40 張；評估集另抽 15 張新的 SKU test 圖（排除第一版用過的）。舊標註保留為 `*_v1.json`。
 
 ## Do Not Do
 
