@@ -97,3 +97,7 @@
 |---|---|---|---|---|
 | 3.15 | 經 nginx 的對外行為也要驗證：nginx 自己產生的錯誤（413、上游無法連線）維持統一 JSON 錯誤格式與 request_id | L1 | 通過 | `docker/nginx.conf` 的 `error_page`；實測 13 MB 上傳回 413 JSON（`FILE_TOO_LARGE`，body 與 `X-Request-ID` header 的 request_id 一致）；停掉 api 時 `/api/v1/healthz` 回 503 JSON（`SERVICE_UNAVAILABLE`） |
 | 3.16 | 相機在 Linux 的乾淨 clone 上以非 root 使用者執行時，監看資料夾與 processed/、failed/ 可寫入；不行時啟動就說明原因 | L1 | 通過 | repo 附 `camera_inbox/.gitkeep`；camera 用 `CAMERA_UID` / `CAMERA_GID`（預設 1000）執行；bind mount `create_host_path: false`；`prepare()` 啟動時實際試寫。Linux 檔案系統（named volume）實測：root 擁有的資料夾 + uid 10001 時啟動即結束並說明要設 CAMERA_UID，資料夾屬於 1000 時正常 |
+
+## Codex 審查結果
+
+第 1 到 4 輪 FAIL（L1 / L2 共 9 項，見上方 3.9 到 3.16 與 git 紀錄），全部修正並實測；**第 5 輪 PASS**（2026-10-26），沒有 L1 / L2 問題、沒有補充標準。

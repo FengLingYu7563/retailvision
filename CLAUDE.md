@@ -50,7 +50,7 @@
 
 ## Last Progress
 
-**Phase 1、2 完成；Phase 3 實作完成（Codex 第 4 輪的 2 項 L1 已修，CI 綠燈），第 5 輪審查腳本 exit 1 未跑完。**
+**Phase 1、2、3 完成**（Phase 3 的 Codex 第 5 輪 PASS，2026-10-26；CI 綠燈）。
 **1.8 重新標註完成（第四輪，2026-10-26）**：定義嚴格執行「框內完全沒有商品」，從頭標、評估集另抽 15 張新圖。
 調參集 40 張 145 個空位，CV 召回 71.0% / 精確 32.7%（門檻 0.25）；新評估集 15 張 55 個空位，
 只跑一次：v2 召回 60.0% / 精確 30.0%（v1 41.8% / 42.6%），**仍未達標（L3）**，已記錄。
@@ -58,7 +58,7 @@
 - 新空位分類器已上線（docker api / worker 已載入）；舊模型備份 `models/gap_classifier_v1-labels.*`（不 commit）；舊標註 `training/data/gap_annotations*_v1.json`。
 - README 範例圖換成新模型的 `test_1016.jpg`（召回 60%、精確 30%，和整體平均相同），另加預測與人工標註對照圖 `docs/screenshots/gaps_eval_example.jpg`。
 - 延遲重測：模型 p95 165 ms；本機 API 單品 132.2 / 貨架 303.4 ms；docker 165.4 / 434.8 ms（都在門檻內）。
-- 本機完整 pytest 通過（145 個，3 個 Windows 不能跑的 skip）；ruff、mypy 通過。**以上改動都還沒 commit。**
+- 本機完整 pytest 通過（145 個，3 個 Windows 不能跑的 skip）；ruff、mypy 通過。已 commit + push（c46a9a9），CI 綠燈。
 - 環境狀況：Docker Desktop 曾因殘留 socket 起不來，已把 `%LOCALAPPDATA%/Docker/run` 改名成 `run.stale-20261026` 解決
   （裡面只有那個 0 byte socket，可在重開機後刪）。Windows WMI 會間歇卡住，卡住時 `import sqlalchemy`、`tasklist`、
   `taskkill` 都會停住，重開機可解。收工時容器已 stop（volume 保留）。
@@ -67,10 +67,9 @@
 
 ## Todos
 
-1. 使用者同意後 commit + push 第四輪標註、文件與新截圖（排除 `models/gap_classifier_v1-labels.json`），確認 CI。
-2. 重跑 Phase 3 Codex 第 5 輪（先查 codex-verify 腳本為何 exit 1），L1 / L2 修到 PASS。
-3. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
-4. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註；再改方法要另標全新評估集。
+1. 使用者重開機後：刪除 `%LOCALAPPDATA%/Docker/run.stale-20261026`（使用者已同意），本機重跑機械檢查確認 WMI 正常。
+2. L3 待辦：分類器中斷後接續訓練的自動化測試（要先重構訓練迴圈）。
+3. 1.8 延伸方向（未排程）：YOLO 加「空位」類別，需要數百張空位標註；再改方法要另標全新評估集。
 
 ## Important Decisions
 
